@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nature's Storehouse — Operations Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@400;600&family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green:  #0a472e;
+      --green2: #0d5c3a;
+      --gold:   #f2ad22;
+      --cream:  #f8f5f0;
+      --border: #1e3d2e;
+      --text:   #d4e8dc;
+      --muted:  #7aad90;
+      --card:   #0d3d27;
+    }
+
+    body {
+      font-family: 'Montserrat', sans-serif;
+      background: var(--green);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      background: #082a1b;
+      border-bottom: 2px solid var(--gold);
+      padding: 0.75rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+    }
+    .logo { height: 52px; width: auto; object-fit: contain; }
+    .header-text h1 {
+      font-family: 'Josefin Sans', sans-serif;
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: var(--cream);
+      letter-spacing: 0.04em;
+    }
+    .header-text .subtitle { font-size: 0.75rem; color: var(--gold); letter-spacing: 0.08em; text-transform: uppercase; }
+    .demo-badge {
+      display: none;
+      background: #5a3c00;
+      color: var(--gold);
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      letter-spacing: 0.05em;
+    }
+    .demo-badge.visible { display: inline-block; }
+    .updated { margin-left: auto; font-size: 0.72rem; color: var(--muted); }
+    .refresh-btn {
+      margin-left: 0.75rem;
+      padding: 0.3rem 0.75rem;
+      background: transparent;
+      border: 1px solid var(--gold);
+      color: var(--gold);
+      border-radius: 4px;
+      font-size: 0.72rem;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      transition: background 0.15s;
+    }
+    .refresh-btn:hover { background: rgba(242,173,34,0.12); }
+    .refresh-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Tab Navigation ───────────────────────────────────────────── */
+    .tab-nav {
+      background: #082a1b;
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex;
+      gap: 0;
+    }
+    .tab-btn {
+      padding: 0.6rem 1.4rem;
+      background: transparent;
+      border: none;
+      border-bottom: 3px solid transparent;
+      color: var(--muted);
+      font-family: 'Josefin Sans', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover { color: var(--cream); }
+    .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+    /* ── Shared Controls bar ─────────────────────────────────────── */
+    .controls {
+      background: #082a1b;
+      border-bottom: 1px solid var(--border);
+      padding: 0.65rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
+    .ctrl-label { font-size: 0.72rem; color: var(--muted); margin-right: 0.2rem; white-space: nowrap; }
+    .ctrl-sep { width: 1px; height: 20px; background: var(--border); margin: 0 0.75rem; flex-shrink: 0; }
+
+    .dow-btn, .days-btn, .labor-days-btn {
+      padding: 0.28rem 0.75rem;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: #0d3d27;
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-family: 'Montserrat', sans-serif;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .dow-btn:hover, .days-btn:hover, .labor-days-btn:hover { border-color: var(--gold); color: var(--cream); }
+    .dow-btn.active, .days-btn.active, .labor-days-btn.active {
+      background: var(--gold);
+      border-color: var(--gold);
+      color: #082a1b;
+      font-weight: 700;
+    }
+
+    .date-range-wrap { display: flex; align-items: center; gap: 0.4rem; }
+    .date-input {
+      background: #0d3d27;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 0.75rem;
+      font-family: 'Montserrat', sans-serif;
+      padding: 0.28rem 0.5rem;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    .date-input::-webkit-calendar-picker-indicator { filter: invert(0.7) sepia(1) saturate(2) hue-rotate(60deg); cursor: pointer; }
+    .apply-btn {
+      padding: 0.28rem 0.75rem;
+      border-radius: 5px;
+      border: 1px solid var(--gold);
+      background: transparent;
+      color: var(--gold);
+      font-size: 0.75rem;
+      font-family: 'Montserrat', sans-serif;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .apply-btn:hover { background: var(--gold); color: #082a1b; }
+
+    .loaded-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: #1a3d00;
+      color: #68d391;
+      border: 1px solid #2d6a47;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      letter-spacing: 0.04em;
+    }
+
+    main { padding: 1.25rem 2rem; max-width: 1300px; margin: 0 auto; }
+
+    /* ── KPI cards ───────────────────────────────────────────────── */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    .kpi {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+    }
+    .kpi .label { font-size: 0.68rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+    .kpi .value { font-family: 'Josefin Sans', sans-serif; font-size: 1.6rem; font-weight: 600; margin-top: 4px; color: var(--cream); }
+    .kpi .sub   { font-size: 0.72rem; color: var(--muted); margin-top: 2px; }
+    .kpi.gold   .value { color: var(--gold); }
+    .kpi.green2 .value { color: #68d391; }
+    .kpi.red    .value { color: #fc8181; }
+    .kpi.yellow .value { color: var(--gold); }
+
+    /* ── Charts ──────────────────────────────────────────────────── */
+    .charts-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .chart-full { grid-column: 1 / -1; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+    }
+    .card h2 {
+      font-family: 'Josefin Sans', sans-serif;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--gold);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+    .chart-wrap      { position: relative; height: 260px; }
+    .chart-wrap-tall { position: relative; height: 300px; }
+
+    /* ── Tables ──────────────────────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th {
+      text-align: left;
+      padding: 0.4rem 0.9rem;
+      color: var(--gold);
+      font-weight: 700;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border);
+    }
+    td { padding: 0.5rem 0.9rem; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #0f4a31; }
+    tr.projected td { opacity: 0.82; }
+    tfoot tr td { border-top: 2px solid var(--gold); font-weight: 700; color: var(--gold); border-bottom: none; }
+
+    /* ── Pills & Scores ──────────────────────────────────────────── */
+    .pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .pill.green  { background: #0d3d27; color: #68d391; border: 1px solid #2d6a47; }
+    .pill.yellow { background: #3d2e00; color: var(--gold); border: 1px solid #7a5a00; }
+    .pill.red    { background: #3d1010; color: #fc8181; border: 1px solid #7a2020; }
+    .pill.gray   { background: #1e3d2e; color: var(--muted); border: 1px solid #2d5a3e; }
+
+    .score-bar-wrap { display: flex; align-items: center; gap: 8px; }
+    .score-bar      { height: 6px; border-radius: 3px; flex: 1; background: #1e3d2e; }
+    .score-bar-fill { height: 100%; border-radius: 3px; }
+
+    .range-note {
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: -0.25rem;
+      margin-bottom: 1rem;
+    }
+
+    /* ── Loading overlay ─────────────────────────────────────────── */
+    #loadingOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(8, 42, 27, 0.85);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    #loadingOverlay.show { display: flex; }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--gold);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { color: var(--gold); font-size: 0.9rem; font-family: 'Josefin Sans', sans-serif; }
+
+    /* ── Labor tab specific ──────────────────────────────────────── */
+    .horizon-note {
+      font-size: 0.72rem;
+      color: #68d391;
+      margin-top: -0.25rem;
+      margin-bottom: 1rem;
+    }
+    .type-badge {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-size: 0.68rem;
+      font-weight: 700;
+    }
+    .type-badge.actual     { background: rgba(242,173,34,0.15); color: var(--gold); border: 1px solid rgba(242,173,34,0.3); }
+    .type-badge.projected  { background: rgba(104,211,145,0.12); color: #68d391; border: 1px solid rgba(104,211,145,0.25); }
+    .type-badge.no-data    { background: #1e3d2e; color: var(--muted); }
+  </style>
+</head>
+<body>
+
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">Fetching data...</div>
+</div>
+
+<header>
+  <img class="logo" src="https://natures-storehouse-2.myshopify.com/cdn/shop/files/nature-store-house-2.webp?v=1771080377" alt="Nature's Storehouse" onerror="this.style.display='none'">
+  <div class="header-text">
+    <h1>Nature's Storehouse</h1>
+    <div class="subtitle">Operations Dashboard</div>
+  </div>
+  <span class="demo-badge" id="demoBadge">DEMO DATA</span>
+  <div class="updated" id="updatedAt"></div>
+  <button class="refresh-btn" id="refreshBtn" onclick="triggerRefresh()" title="Fetch latest data from Clover &amp; Homebase">&#8635; Refresh</button>
+</header>
+
+<!-- Tab navigation -->
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="shift">Shift Analysis</button>
+  <button class="tab-btn" data-tab="labor">Labor Ratio</button>
+</nav>
+
+<!-- Shift Analysis controls -->
+<div class="controls" id="shiftControls">
+  <span class="ctrl-label">Day of week:</span>
+  <button class="dow-btn active" data-dow="all">All Days</button>
+  <button class="dow-btn" data-dow="0">Mon</button>
+  <button class="dow-btn" data-dow="1">Tue</button>
+  <button class="dow-btn" data-dow="2">Wed</button>
+  <button class="dow-btn" data-dow="3">Thu</button>
+  <button class="dow-btn" data-dow="4">Fri</button>
+  <button class="dow-btn" data-dow="5">Sat</button>
+  <button class="dow-btn" data-dow="6">Sun</button>
+
+  <div class="ctrl-sep"></div>
+  <span class="ctrl-label">Data range:</span>
+  <button class="days-btn" data-days="30">30d</button>
+  <button class="days-btn" data-days="60">60d</button>
+  <button class="days-btn active" data-days="90">90d</button>
+  <button class="days-btn" data-days="180">180d</button>
+  <button class="days-btn" data-days="365">365d</button>
+
+  <div class="ctrl-sep"></div>
+  <span class="ctrl-label">Date range:</span>
+  <div class="date-range-wrap">
+    <input class="date-input" type="date" id="startDate" title="Start date">
+    <span style="color:var(--muted);font-size:0.75rem">to</span>
+    <input class="date-input" type="date" id="endDate" title="End date">
+    <button class="apply-btn" id="applyDateRange">Apply</button>
+  </div>
+</div>
+
+<!-- Labor Ratio controls -->
+<div class="controls" id="laborControls" style="display:none">
+  <span class="ctrl-label">Period:</span>
+  <button class="labor-days-btn active" data-days="30">30d</button>
+  <button class="labor-days-btn" data-days="14">14d</button>
+  <button class="labor-days-btn" data-days="7">7d</button>
+  <button class="labor-days-btn" data-days="90">90d</button>
+
+  <div class="ctrl-sep"></div>
+  <span class="ctrl-label">Custom range:</span>
+  <div class="date-range-wrap">
+    <input class="date-input" type="date" id="laborStartDate" title="Start date">
+    <span style="color:var(--muted);font-size:0.75rem">to</span>
+    <input class="date-input" type="date" id="laborEndDate" title="End date (future = scheduled hours)">
+    <button class="apply-btn" id="applyLaborRange">Apply</button>
+  </div>
+
+  <div class="ctrl-sep"></div>
+  <span class="loaded-badge">1.2&times; Fully Loaded</span>
+  <span style="font-size:0.7rem;color:var(--muted);margin-left:4px">&middot; Past = timesheets &middot; Future = published schedule</span>
+</div>
+
+<!-- Shift Analysis content -->
+<main id="shiftMain"></main>
+
+<!-- Labor Ratio content -->
+<main id="laborMain" style="display:none"></main>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+// Shared state
+// ─────────────────────────────────────────────────────────────
+const STORE_HOURS = {
+  0: [9, 17], 1: [9, 17], 2: [9, 17], 3: [9, 17], 4: [9, 17],
+  5: [9, 16], 6: [9, 16]
+};
+const ALL_STORE_HOURS = [9, 17];
+
+function hourLabel(h) {
+  if (h === 0)  return '12 AM';
+  if (h < 12)  return h + ' AM';
+  if (h === 12) return '12 PM';
+  return (h - 12) + ' PM';
+}
+function hourRange(h) {
+  const end = h + 1 > 23 ? 0 : h + 1;
+  return hourLabel(h) + '\u2013' + hourLabel(end);
+}
+
+const DOW_NAMES = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+let shiftCharts = [];
+let laborCharts = [];
+let merchantData = null;
+let activeDow = null;
+let currentDays = 90;
+let laborDataLoaded = false;
+let scheduleHorizon = null; // ISO date string of last published shift
+
+// Track the active filter params so background refreshes preserve user selections
+let activeShiftParams = { days: 90 };
+let activeLaborParams = { days: 30 };
+
+function scoreColor(s) {
+  if (s >= 7) return '#68d391';
+  if (s >= 4) return '#f2ad22';
+  return '#fc8181';
+}
+function scoreClass(s) {
+  if (s >= 7) return 'green';
+  if (s >= 4) return 'yellow';
+  return 'red';
+}
+function ratioClass(r) {
+  if (r === null || r === undefined) return 'gray';
+  if (r < 20)  return 'green';
+  if (r <= 35) return 'yellow';
+  return 'red';
+}
+function fmtDollars(v) { return '$' + (v || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}); }
+function fmtPct(v) { return v !== null && v !== undefined ? v.toFixed(1) + '%' : '—'; }
+
+// ─────────────────────────────────────────────────────────────
+// Tab switching
+// ─────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === tab)
+  );
+  document.getElementById('shiftControls').style.display = tab === 'shift' ? '' : 'none';
+  document.getElementById('laborControls').style.display = tab === 'labor' ? '' : 'none';
+  document.getElementById('shiftMain').style.display    = tab === 'shift' ? '' : 'none';
+  document.getElementById('laborMain').style.display    = tab === 'labor' ? '' : 'none';
+
+  if (tab === 'labor' && !laborDataLoaded) {
+    loadLaborData({ days: 30 });
+  }
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+// ─────────────────────────────────────────────────────────────
+// SHIFT ANALYSIS TAB
+// ─────────────────────────────────────────────────────────────
+function destroyShiftCharts() { shiftCharts.forEach(c => c.destroy()); shiftCharts = []; }
+
+function getFilteredHours(data) {
+  const [minH, maxH] = activeDow !== null
+    ? (STORE_HOURS[activeDow] || ALL_STORE_HOURS)
+    : ALL_STORE_HOURS;
+
+  let hours;
+  if (activeDow !== null && data.hours_by_dow && data.hours_by_dow[activeDow] && data.hours_by_dow[activeDow].length) {
+    hours = data.hours_by_dow[activeDow];
+  } else {
+    hours = data.hours;
+  }
+
+  return hours.filter(h => h.hour >= minH && h.hour <= maxH);
+}
+
+function rebaseQuietScores(hours) {
+  if (!hours.length) return hours;
+  // Always normalize against the all-days range so the same transaction
+  // count maps to the same quiet score regardless of which DOW is selected.
+  const allHours = merchantData ? merchantData.hours : hours;
+  const minT = Math.min(...allHours.map(h => h.avg_transactions));
+  const maxT = Math.max(...allHours.map(h => h.avg_transactions));
+  const range = maxT - minT;
+  return hours.map(h => ({
+    ...h,
+    quiet_score: range > 0
+      ? +((10 * (maxT - h.avg_transactions) / range).toFixed(1))
+      : 10
+  }));
+}
+
+function renderShift(data) {
+  merchantData = data;
+  destroyShiftCharts();
+
+  const rawHours = getFilteredHours(data);
+  const hours = rebaseQuietScores(rawHours);
+
+  const dowLabel = activeDow !== null ? DOW_NAMES[activeDow] : 'All Days';
+  const [minH, maxH] = activeDow !== null ? (STORE_HOURS[activeDow] || ALL_STORE_HOURS) : ALL_STORE_HOURS;
+
+  const daysWindow = data.days_window || currentDays;
+  const rangeNote = `Last ${daysWindow} days \u00b7 Store hours ${hourLabel(minH)}\u2013${hourLabel(maxH + 1)} \u00b7 ${dowLabel} \u00b7 Quiet Score normalized across all days`;
+
+  const labels = hours.map(h => hourLabel(h.hour));
+  const sales  = hours.map(h => +(h.avg_volume       || 0).toFixed(2));
+  const txns   = hours.map(h => +(h.avg_transactions || 0).toFixed(1));
+  const scores = hours.map(h => +(h.quiet_score      || 0).toFixed(1));
+
+  const peakHour  = hours.length ? hours.reduce((a, b) => b.avg_volume > a.avg_volume ? b : a)  : null;
+  const quietHour = hours.length ? hours.reduce((a, b) => b.quiet_score > a.quiet_score ? b : a) : null;
+  const totalDaily = sales.reduce((a, b) => a + b, 0);
+  const peakTxn   = txns.length ? Math.max(...txns).toFixed(1) : '0';
+  const actualDays = hours.length ? Math.max(...hours.map(h => h.days_observed || 0)) : 0;
+  const daysNote   = (daysWindow > actualDays && actualDays > 0)
+    ? ` &mdash; only ${actualDays} days of data available`
+    : '';
+
+  document.getElementById('shiftMain').innerHTML = `
+    <div class="kpi-row">
+      <div class="kpi gold">
+        <div class="label">Est. Daily Revenue</div>
+        <div class="value">$${Math.round(totalDaily).toLocaleString()}</div>
+        <div class="sub">${dowLabel} store hours avg (payment totals)</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Peak Sales Hour</div>
+        <div class="value">${peakHour ? hourLabel(peakHour.hour) : '&mdash;'}</div>
+        <div class="sub">${peakHour ? '$' + Math.round(peakHour.avg_volume).toLocaleString() + ' avg' : ''}</div>
+      </div>
+      <div class="kpi green2">
+        <div class="label">Best Chore Window</div>
+        <div class="value">${quietHour ? hourLabel(quietHour.hour) : '&mdash;'}</div>
+        <div class="sub">Quiet Score ${quietHour ? quietHour.quiet_score.toFixed(1) : '&mdash;'}/10</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Days of Data</div>
+        <div class="value">${actualDays}</div>
+        <div class="sub">of ${daysWindow} requested${daysNote ? ' &mdash; limited history' : ''}</div>
+      </div>
+    </div>
+
+    <div class="range-note">${rangeNote}</div>
+
+    <div class="charts-grid">
+      <div class="card">
+        <h2>Avg Hourly Sales &amp; Transactions</h2>
+        <div class="chart-wrap-tall"><canvas id="salesChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>Quiet Score by Hour</h2>
+        <div class="chart-wrap-tall"><canvas id="quietChart"></canvas></div>
+      </div>
+
+      <div class="card chart-full">
+        <h2>Shift Analysis &mdash; ${dowLabel}</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Hour</th>
+              <th>Avg Transactions</th>
+              <th>Avg Net Sales ($)</th>
+              <th>Quiet Score</th>
+              <th>Recommended Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${hours.map(h => {
+              const sc = scoreClass(h.quiet_score);
+              const sw = (h.quiet_score / 10 * 100).toFixed(0);
+              const action = h.quiet_score >= 7
+                ? 'Schedule chores / maintenance'
+                : h.quiet_score >= 4
+                  ? 'Light tasks only'
+                  : 'All hands on floor';
+              return `<tr>
+                <td><strong>${hourRange(h.hour)}</strong></td>
+                <td>${(h.avg_transactions || 0).toFixed(1)}</td>
+                <td>$${(h.avg_volume || 0).toFixed(2)}</td>
+                <td>
+                  <div class="score-bar-wrap">
+                    <span class="pill ${sc}">${h.quiet_score.toFixed(1)}</span>
+                    <div class="score-bar">
+                      <div class="score-bar-fill" style="width:${sw}%;background:${scoreColor(h.quiet_score)}"></div>
+                    </div>
+                  </div>
+                </td>
+                <td><span class="pill ${sc}">${action}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="2"></td>
+              <td>$${totalDaily.toFixed(2)}</td>
+              <td colspan="2" style="font-size:0.72rem;color:var(--muted);font-weight:400">Est. daily total (store hours)</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>`;
+
+  const gridColor = '#1e3d2e';
+  const tickColor = '#7aad90';
+
+  const ctx1 = document.getElementById('salesChart').getContext('2d');
+  shiftCharts.push(new Chart(ctx1, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Avg Sales ($)',
+          data: sales,
+          backgroundColor: 'rgba(242,173,34,0.6)',
+          borderColor: '#f2ad22',
+          borderWidth: 1,
+          yAxisID: 'y',
+        },
+        {
+          label: 'Avg Transactions',
+          data: txns,
+          type: 'line',
+          borderColor: '#68d391',
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          pointRadius: 4,
+          pointBackgroundColor: '#68d391',
+          tension: 0.35,
+          yAxisID: 'y2',
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: tickColor, boxWidth: 12 } } },
+      scales: {
+        x: { ticks: { color: tickColor, maxRotation: 40 }, grid: { color: gridColor } },
+        y: {
+          position: 'left',
+          ticks: { color: tickColor, callback: v => '$' + v },
+          grid: { color: gridColor },
+        },
+        y2: {
+          position: 'right',
+          ticks: { color: '#68d391' },
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'Transactions', color: '#4a7a5a' }
+        }
+      }
+    }
+  }));
+
+  const ctx2 = document.getElementById('quietChart').getContext('2d');
+  shiftCharts.push(new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Quiet Score (10 = best for chores)',
+        data: scores,
+        backgroundColor: scores.map(s => scoreColor(s) + 'bb'),
+        borderColor: scores.map(s => scoreColor(s)),
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: tickColor, boxWidth: 12 } } },
+      scales: {
+        x: { ticks: { color: tickColor, maxRotation: 40 }, grid: { color: gridColor } },
+        y: {
+          min: 0, max: 10,
+          ticks: { color: tickColor },
+          grid: { color: gridColor },
+        }
+      }
+    }
+  }));
+}
+
+function setDaysBtnActive(days) {
+  document.querySelectorAll('.days-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.days) === days);
+  });
+}
+
+async function loadData(params = {}, silent = false) {
+  if (!silent) {
+    // User-initiated: update the active params and show spinner
+    activeShiftParams = Object.keys(params).length > 0 ? params : activeShiftParams;
+    document.getElementById('loadingText').textContent = 'Fetching sales data from Clover...';
+    document.getElementById('loadingOverlay').classList.add('show');
+  }
+
+  try {
+    const qs = new URLSearchParams(activeShiftParams).toString();
+    const url = '/store_status' + (qs ? '?' + qs : '');
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.error) { if (!silent) alert('Error: ' + json.error); return; }
+
+    document.getElementById('demoBadge').classList.toggle('visible', json.demo || false);
+    const updatedEl = document.getElementById('updatedAt');
+    updatedEl.textContent = 'Updated ' + new Date(json.updated_at).toLocaleString();
+    updatedEl.dataset.updatedAt = json.updated_at;
+
+    if (json.days_window) {
+      currentDays = json.days_window;
+      setDaysBtnActive(currentDays);
+    }
+
+    const ids = Object.keys(json.merchants);
+    if (ids.length) {
+      merchantData = json.merchants[ids[0]];
+      renderShift(merchantData);
+    }
+  } finally {
+    if (!silent) document.getElementById('loadingOverlay').classList.remove('show');
+  }
+}
+
+// Shift tab control wiring
+document.querySelectorAll('.dow-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.dow-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeDow = btn.dataset.dow === 'all' ? null : parseInt(btn.dataset.dow);
+    if (merchantData) renderShift(merchantData);
+  });
+});
+
+document.querySelectorAll('.days-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const days = parseInt(btn.dataset.days);
+    document.getElementById('startDate').value = '';
+    document.getElementById('endDate').value = '';
+    activeShiftParams = { days };
+    loadData({}, false);
+  });
+});
+
+document.getElementById('applyDateRange').addEventListener('click', () => {
+  const start = document.getElementById('startDate').value;
+  const end = document.getElementById('endDate').value;
+  if (!start && !end) return;
+  document.querySelectorAll('.days-btn').forEach(b => b.classList.remove('active'));
+  const params = {};
+  if (start) params.start = start;
+  if (end) params.end = end;
+  activeShiftParams = params;
+  loadData({}, false);
+});
+
+// ─────────────────────────────────────────────────────────────
+// LABOR RATIO TAB
+// ─────────────────────────────────────────────────────────────
+function destroyLaborCharts() { laborCharts.forEach(c => c.destroy()); laborCharts = []; }
+
+function setLaborDaysBtnActive(days) {
+  document.querySelectorAll('.labor-days-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.days) === days);
+  });
+}
+
+function renderLaborTab(data) {
+  destroyLaborCharts();
+  laborDataLoaded = true;
+
+  if (data.schedule_published_through) {
+    scheduleHorizon = data.schedule_published_through;
+    document.getElementById('laborEndDate').max = scheduleHorizon;
+  }
+
+  const s = data.summary || {};
+  const mult = data.loaded_cost_multiplier || 1.2;
+  const daily = data.daily || [];
+  const demo      = data.demo || false;
+  const synthetic = data.synthetic || false;
+  const horizon = data.schedule_published_through;
+  const histDays   = daily.filter(d => d.is_historical);
+  const futureDays = daily.filter(d => !d.is_historical);
+
+  // KPI values
+  const actualRatio = s.actual_labor_ratio_pct;
+  const schedRatio  = s.scheduled_labor_ratio_pct;
+  const totalLoaded = s.total_actual_cost_loaded || 0;
+  const totalHours  = s.total_actual_hours || 0;
+  const schedHours  = s.total_scheduled_hours || 0;
+  const totalSales  = s.total_sales || 0;
+
+  const arClass = ratioClass(actualRatio);
+  const srClass = ratioClass(schedRatio);
+
+  const horizonNote = horizon
+    ? `Schedule published through <strong>${horizon}</strong> &middot; Future dates show projected hours from the published schedule.`
+    : 'No published schedule found &middot; Future dates may not have scheduled shift data.';
+
+  document.getElementById('laborMain').innerHTML = `
+    <div class="kpi-row">
+      <div class="kpi ${arClass === 'green' ? 'green2' : arClass}">
+        <div class="label">Actual Labor Ratio</div>
+        <div class="value">${fmtPct(actualRatio)}</div>
+        <div class="sub">${fmtDollars(totalLoaded)} loaded cost &middot; ${totalHours.toFixed(0)}h</div>
+      </div>
+      <div class="kpi gold">
+        <div class="label">Net Sales</div>
+        <div class="value">${fmtDollars(totalSales)}</div>
+        <div class="sub">gross minus refunds</div>
+      </div>
+      <div class="kpi ${srClass === 'green' ? 'green2' : srClass}">
+        <div class="label">Projected Labor Ratio</div>
+        <div class="value">${fmtPct(schedRatio)}</div>
+        <div class="sub">from published schedule &middot; ${schedHours.toFixed(0)}h</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Loaded Cost Factor</div>
+        <div class="value">${mult.toFixed(1)}&times;</div>
+        <div class="sub">nominal wages &times; ${mult.toFixed(1)} (taxes + benefits)</div>
+      </div>
+    </div>
+
+    ${synthetic && !demo ? '<div class="horizon-note" style="border-left:3px solid #f59e0b;background:#fef3c7;color:#92400e">⚠ Synthetic labor data — Homebase API requires the All-in-one plan. Hourly figures are illustrative.</div>' : ''}
+    <div class="horizon-note">${horizonNote}${demo ? ' &middot; <em>Demo data</em>' : ''}</div>
+
+    <div class="charts-grid">
+      <div class="card chart-full">
+        <h2>Daily Labor Ratio % &mdash; Actual vs Projected</h2>
+        <div class="chart-wrap-tall"><canvas id="laborRatioChart"></canvas></div>
+      </div>
+
+      <div class="card chart-full">
+        <h2>Actuals</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Day</th>
+              <th>Type</th>
+              <th>Hours</th>
+              <th>Nominal Cost</th>
+              <th>Loaded Cost (${mult.toFixed(1)}&times;)</th>
+              <th>Sales</th>
+              <th>Labor Ratio</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${histDays.map(d => {
+              const ratio  = d.actual_labor_ratio_pct;
+              const rc     = ratioClass(ratio);
+              const ratioCell = ratio !== null && ratio !== undefined
+                ? `<span class="pill ${rc}">${ratio.toFixed(1)}%</span>`
+                : '<span class="pill gray">No sales</span>';
+              const salesDisplay = d.sales > 0.01
+                ? fmtDollars(d.sales)
+                : '<span style="color:var(--muted)">—</span>';
+              return `<tr>
+                <td><strong>${d.date}</strong></td>
+                <td style="color:var(--muted)">${d.day_of_week.slice(0,3)}</td>
+                <td><span class="type-badge actual">Actual</span></td>
+                <td>${d.actual_hours.toFixed(1)}h</td>
+                <td>${fmtDollars(d.actual_cost_nominal)}</td>
+                <td style="color:var(--gold)">${fmtDollars(d.actual_cost_loaded)}</td>
+                <td>${salesDisplay}</td>
+                <td>${ratioCell}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="3">Totals</td>
+              <td>${(s.total_actual_hours || 0).toFixed(1)}h</td>
+              <td>—</td>
+              <td>${fmtDollars(s.total_actual_cost_loaded)}</td>
+              <td>${fmtDollars(s.total_sales)}</td>
+              <td>${fmtPct(s.actual_labor_ratio_pct)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      ${futureDays.length > 0 ? `
+      <div class="card chart-full">
+        <h2>Upcoming Schedule</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Day</th>
+              <th>Type</th>
+              <th>Hours</th>
+              <th>Nominal Cost</th>
+              <th>Loaded Cost (${mult.toFixed(1)}&times;)</th>
+              <th>Sales</th>
+              <th>Labor Ratio</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${futureDays.map(d => {
+              const ratio  = d.scheduled_labor_ratio_pct;
+              const rc     = ratioClass(ratio);
+              const ratioCell = ratio !== null && ratio !== undefined
+                ? `<span class="pill ${rc}">${ratio.toFixed(1)}%</span>`
+                : '<span class="pill gray">No sales</span>';
+              const salesDisplay = d.projected_sales > 0.01
+                ? `<span title="90-day DOW avg" style="color:var(--muted)">${fmtDollars(d.projected_sales)} est.</span>`
+                : '<span style="color:var(--muted)">—</span>';
+              return `<tr class="projected">
+                <td><strong>${d.date}</strong></td>
+                <td style="color:var(--muted)">${d.day_of_week.slice(0,3)}</td>
+                <td><span class="type-badge projected">Projected</span></td>
+                <td>${d.scheduled_hours.toFixed(1)}h</td>
+                <td>${fmtDollars(d.scheduled_cost_nominal)}</td>
+                <td style="color:var(--gold)">${fmtDollars(d.scheduled_cost_loaded)}</td>
+                <td>${salesDisplay}</td>
+                <td>${ratioCell}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="3">Totals</td>
+              <td>${(s.total_scheduled_hours || 0).toFixed(1)}h scheduled</td>
+              <td>—</td>
+              <td>${fmtDollars(s.total_scheduled_cost_loaded)}</td>
+              <td>${fmtDollars(s.total_sales_with_projected)} <span style="color:var(--muted)">(est.)</span></td>
+              <td>${fmtPct(s.scheduled_labor_ratio_pct)} <span style="color:var(--muted)">projected</span></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>` : ''}
+    </div>`;
+
+  // Build chart data
+  const chartLabels = daily.map(d => d.date);
+  const actualRatios = daily.map(d => d.is_historical ? d.actual_labor_ratio_pct : null);
+  const schedRatios  = daily.map(d => !d.is_historical ? d.scheduled_labor_ratio_pct : null);
+
+  const gridColor = '#1e3d2e';
+  const tickColor = '#7aad90';
+
+  const ctx = document.getElementById('laborRatioChart').getContext('2d');
+  laborCharts.push(new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: chartLabels,
+      datasets: [
+        {
+          label: 'Actual Labor Ratio %',
+          data: actualRatios,
+          borderColor: '#f2ad22',
+          backgroundColor: 'rgba(242,173,34,0.1)',
+          borderWidth: 2,
+          pointRadius: 3,
+          pointBackgroundColor: '#f2ad22',
+          tension: 0.25,
+          spanGaps: false,
+        },
+        {
+          label: 'Projected Labor Ratio % (from schedule)',
+          data: schedRatios,
+          borderColor: '#68d391',
+          backgroundColor: 'rgba(104,211,145,0.08)',
+          borderWidth: 2,
+          borderDash: [5, 4],
+          pointRadius: 3,
+          pointBackgroundColor: '#68d391',
+          tension: 0.25,
+          spanGaps: false,
+        },
+        // Reference lines
+        {
+          label: 'Excellent (<20%)',
+          data: chartLabels.map(() => 20),
+          borderColor: 'rgba(104,211,145,0.35)',
+          borderWidth: 1,
+          borderDash: [3, 3],
+          pointRadius: 0,
+          fill: false,
+        },
+        {
+          label: 'Review (>35%)',
+          data: chartLabels.map(() => 35),
+          borderColor: 'rgba(252,129,129,0.35)',
+          borderWidth: 1,
+          borderDash: [3, 3],
+          pointRadius: 0,
+          fill: false,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: tickColor, boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw;
+              if (v === null || v === undefined) return null;
+              return `${ctx.dataset.label}: ${v.toFixed(1)}%`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: tickColor, maxRotation: 45, maxTicksLimit: 20 },
+          grid: { color: gridColor }
+        },
+        y: {
+          ticks: { color: tickColor, callback: v => v + '%' },
+          grid: { color: gridColor },
+          title: { display: true, text: 'Labor Ratio %', color: tickColor },
+        }
+      }
+    }
+  }));
+}
+
+async function loadLaborData(params = {}, silent = false) {
+  if (Object.keys(params).length > 0) activeLaborParams = params;
+
+  if (!silent) {
+    document.getElementById('loadingText').textContent = 'Fetching labor data from Homebase...';
+    document.getElementById('loadingOverlay').classList.add('show');
+  }
+
+  try {
+    const qs = new URLSearchParams(activeLaborParams).toString();
+    const url = '/labor_data' + (qs ? '?' + qs : '');
+    const res = await fetch(url);
+    const json = await res.json();
+    if (json.error) { if (!silent) alert('Labor data error: ' + json.error); return; }
+
+    document.getElementById('demoBadge').classList.toggle('visible', json.demo || false);
+    renderLaborTab(json);
+  } catch (e) {
+    alert('Failed to load labor data: ' + e.message);
+  } finally {
+    document.getElementById('loadingOverlay').classList.remove('show');
+  }
+}
+
+// Labor controls wiring
+document.querySelectorAll('.labor-days-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const days = parseInt(btn.dataset.days);
+    document.querySelectorAll('.labor-days-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('laborStartDate').value = '';
+    document.getElementById('laborEndDate').value = '';
+    loadLaborData({ days });
+  });
+});
+
+document.getElementById('applyLaborRange').addEventListener('click', () => {
+  const start = document.getElementById('laborStartDate').value;
+  const end   = document.getElementById('laborEndDate').value;
+  if (!start && !end) return;
+
+  // Validate end date against schedule horizon
+  if (end && scheduleHorizon && end > scheduleHorizon) {
+    alert(`Schedule is only published through ${scheduleHorizon}. Please choose an end date on or before that date.`);
+    document.getElementById('laborEndDate').value = scheduleHorizon;
+    return;
+  }
+
+  document.querySelectorAll('.labor-days-btn').forEach(b => b.classList.remove('active'));
+  const params = {};
+  if (start) params.start = start;
+  if (end)   params.end   = end;
+  loadLaborData(params);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Manual data refresh (hits /api/refresh, polls until done)
+// ─────────────────────────────────────────────────────────────
+async function triggerRefresh() {
+  const btn = document.getElementById('refreshBtn');
+  const updatedEl = document.getElementById('updatedAt');
+  btn.disabled = true;
+  btn.textContent = '⏳ Refreshing…';
+
+  try {
+    const res = await fetch('/api/refresh', { method: 'POST' });
+    const json = await res.json();
+
+    if (res.status === 429) {
+      const msg = json.retry_after
+        ? `Rate limited — try again in ${json.retry_after}s`
+        : (json.status === 'already_refreshing' ? 'Already refreshing…' : 'Rate limited');
+      btn.textContent = msg;
+      setTimeout(() => { btn.textContent = '↻ Refresh'; btn.disabled = false; }, 5000);
+      return;
+    }
+
+    // Poll /api/cache_status until refreshing = false
+    const prevUpdatedAt = updatedEl.dataset.updatedAt || null;
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const statusRes = await fetch('/api/cache_status');
+        const status = await statusRes.json();
+        if (!status.refreshing && status.updated_at && status.updated_at !== prevUpdatedAt) {
+          clearInterval(poll);
+          btn.textContent = '↻ Refresh';
+          btn.disabled = false;
+          // Reload both data tabs silently
+          loadData({}, true);
+          if (laborDataLoaded) loadLaborData({}, true);
+        } else if (attempts > 60) {  // 3-minute timeout
+          clearInterval(poll);
+          btn.textContent = '↻ Refresh';
+          btn.disabled = false;
+        }
+      } catch (_) { /* ignore poll errors */ }
+    }, 3000);
+
+  } catch (e) {
+    btn.textContent = '↻ Refresh';
+    btn.disabled = false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Init + background refresh (preserves user filter selections)
+// ─────────────────────────────────────────────────────────────
+loadData();
+
+// Silently refresh data every 5 minutes without resetting user's active filters
+setInterval(() => {
+  loadData({}, true);                          // shift tab — silent
+  if (laborDataLoaded) loadLaborData({}, true); // labor tab — silent, only if loaded
+}, 5 * 60 * 1000);
+</script>
+</body>
+</html>

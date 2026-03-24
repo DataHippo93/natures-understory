@@ -1,0 +1,46 @@
+# Clover Sales Analysis Bot Configuration
+# Merchant tokens should be stored in .env (never commit tokens here)
+
+merchants:
+  - id: "NATURES_STOREHOUSE"
+    name: "Nature's Storehouse"
+    mid: "${NATURES_STOREHOUSE_MID}"
+    token: "${NATURES_STOREHOUSE_TOKEN}"
+
+  - id: "ADK_FRAGRANCE"
+    name: "Adirondack Fragrance Farm"
+    mid: "${ADK_FRAGRANCE_MID}"
+    token: "${ADK_FRAGRANCE_TOKEN}"
+
+clover:
+  base_url: "https://api.clover.com"
+  api_version: "v3"
+  rate_limit_rps: 16       # Clover allows 16 req/sec
+  page_size: 1000           # max records per page
+  timeout_seconds: 30
+
+analysis:
+  default_lookback_days: 30
+  quiet_score_percentile: 75  # hours below this percentile get highest scores
+  min_daily_sales_threshold: 0.01  # days with sales <= this are treated as closed
+
+output:
+  csv_path: "sales_trends.csv"
+  forecast_hours_per_day: 24
+
+server:
+  host: "0.0.0.0"
+  port: 8765
+  json_output_path: "store_status.json"
+
+homebase:
+  base_url: "https://app.joinhomebase.com/api/public"
+  location_id: "${HOMEBASE_LOCATION_ID}"  # optional — leave blank to fetch all locations
+  per_page: 100
+
+labor:
+  fake_avg_wage: 17.00           # $/hr used when HOMEBASE_API_KEY is not set
+  loaded_cost_multiplier: 1.2    # fully loaded cost factor (wages + taxes + benefits)
+  efficiency_thresholds:
+    excellent: 20                # labor ratio < 20% = green
+    acceptable: 35               # 20–35% = yellow, >35% = red
