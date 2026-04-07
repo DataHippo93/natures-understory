@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -51,6 +51,7 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|api/auth).*)',
+    // Exclude static assets, auth API routes, cron routes (use CRON_SECRET), and admin API routes
+    '/((?!_next/static|_next/image|favicon.ico|icon.svg|api/auth|api/cron|api/admin|api/debug).*)',
   ],
 };

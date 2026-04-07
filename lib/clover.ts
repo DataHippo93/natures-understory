@@ -120,7 +120,10 @@ export interface CloverLineItem {
   quantity?: number; // alias
   discountAmount?: number; // cents
   refunded?: boolean;
-  item?: { id: string };
+  item?: {
+    id: string;
+    categories?: { elements: Array<{ id: string; name: string }> };
+  };
   createdTime: number; // ms epoch
 }
 
@@ -189,14 +192,14 @@ export async function fetchOrdersWithLineItems(startMs: number, endMs: number): 
     const params = new URLSearchParams();
     params.append('filter', `createdTime>=${startMs}`);
     params.append('filter', `createdTime<${endMs}`);
-    params.append('expand', 'lineItems');
+    params.append('expand', 'lineItems,lineItems.item,lineItems.item.categories');
     params.append('limit', String(limit));
     params.append('offset', String(offset));
     params.append('orderBy', 'createdTime ASC');
 
     const res = await fetch(`${CLOVER_BASE}/${mid}/orders?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
-      next: { revalidate: 0 },
+      cache: 'no-store',
     });
     if (!res.ok) throw new Error(`Clover orders ${res.status}: ${await res.text()}`);
     const data = await res.json();

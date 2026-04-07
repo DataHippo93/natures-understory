@@ -61,7 +61,14 @@ export async function POST(req: NextRequest) {
         if (li.refunded) continue;
 
         const itemId = li.item?.id ?? null;
-        const categoryInfo = itemId ? (itemCategoryMap.get(itemId) ?? { category_id: null, category_name: null }) : { category_id: null, category_name: null };
+        // Prefer category embedded in the order response (covers deleted/hidden items)
+        const embeddedCats = li.item?.categories?.elements ?? [];
+        const embeddedCat = embeddedCats[0] ?? null;
+        const categoryInfo = embeddedCat
+          ? { category_id: embeddedCat.id, category_name: embeddedCat.name }
+          : itemId
+            ? (itemCategoryMap.get(itemId) ?? { category_id: null, category_name: null })
+            : { category_id: null, category_name: null };
 
         const ts = li.createdTime || order.createdTime;
         const quantity = li.unitQty ?? li.quantity ?? 1;

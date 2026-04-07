@@ -26,6 +26,7 @@ cache/
 # Editor / OS / local dev notes
 .claude/
 CLAUDE.md
+inspect_me/
 desktop.ini
 .DS_Store
 Thumbs.db

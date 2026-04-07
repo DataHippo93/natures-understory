@@ -19,6 +19,12 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: "Nature's Understory | Operations",
   description: "Internal operations dashboard for Nature's Storehouse",
+  icons: {
+    icon: [
+      { url: '/icon.svg', type: 'image/svg+xml' },
+    ],
+    apple: '/icon.svg',
+  },
 };
 
 export default async function RootLayout({
