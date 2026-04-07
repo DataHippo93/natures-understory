@@ -1,44 +1,45 @@
 import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Josefin_Sans, Montserrat } from 'next/font/google';
 import './globals.css';
-import { Header } from '@/components/header';
-import { getIsDemoMode } from '@/lib/data';
+import { Sidebar } from '@/components/sidebar';
+import { createClient } from '@/lib/supabase/server';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
+const josefinSans = Josefin_Sans({
+  variable: '--font-josefin',
   subsets: ['latin'],
+  weight: ['400', '600', '700'],
 });
 
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const montserrat = Montserrat({
+  variable: '--font-montserrat',
   subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
 });
 
 export const metadata: Metadata = {
-  title: "Nature's Understory | Operations Dashboard",
+  title: "Nature's Understory | Operations",
   description: "Internal operations dashboard for Nature's Storehouse",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  const isDemoMode = getIsDemoMode();
+}: Readonly<{ children: React.ReactNode }>) {
+  const supabase = await createClient();
+  const user = supabase ? (await supabase.auth.getUser()).data.user : null;
 
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col bg-stone-50 dark:bg-stone-900">
-        <Header isDemoMode={isDemoMode} />
-        <main className="flex-1">{children}</main>
-        <footer className="border-t border-stone-200 bg-white py-4 dark:border-stone-800 dark:bg-stone-950">
-          <div className="mx-auto max-w-7xl px-4 text-center text-sm text-stone-500 sm:px-6 lg:px-8">
-            Nature&apos;s Storehouse - Canton, NY
-          </div>
-        </footer>
+    <html lang="en" className={`${josefinSans.variable} ${montserrat.variable} h-full`}>
+      <body className="h-full" style={{ background: 'var(--forest-dark)', color: 'var(--cream)' }}>
+        <Sidebar userEmail={user?.email} />
+        {/* Main content offset by sidebar width */}
+        <div className="ml-56 min-h-screen flex flex-col">
+          <main className="flex-1 p-6 lg:p-8">
+            {children}
+          </main>
+          <footer className="px-6 py-3 text-xs lg:px-8" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--forest-mid)' }}>
+            Nature&apos;s Storehouse · Canton, NY · Internal use only
+          </footer>
+        </div>
       </body>
     </html>
   );

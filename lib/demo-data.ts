@@ -48,10 +48,13 @@ function generateHourlyQuietScores(date: Date): QuietScore[] {
 
     const score = Math.min(10, Math.max(0, Math.round(baseScore * 10) / 10));
 
+    const transactions = Math.round(score >= 7 ? rand() * 5 : score >= 4 ? 5 + rand() * 10 : 10 + rand() * 20);
     scores.push({
       hour,
       score,
       label: score >= 7 ? 'quiet' : score >= 4 ? 'light' : 'peak',
+      transactions,
+      hourlySales: Math.round(transactions * (20 + rand() * 30) * 100) / 100,
     });
   }
 
@@ -114,6 +117,7 @@ function generateLaborActuals(days: number): LaborActuals[] {
       fullyLoadedCost,
       netSales,
       laborRatio,
+      hasLaborData: true,
     });
   }
 

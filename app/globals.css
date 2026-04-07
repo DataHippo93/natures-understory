@@ -1,44 +1,48 @@
 @import "tailwindcss";
 
 :root {
-  --background: #fafaf9;
-  --foreground: #1c1917;
+  /* Earth / bark palette — forest understory */
+  --forest-darkest: #0c0906;   /* deep loam, forest floor in shadow */
+  --forest-dark:    #161009;   /* rich dark soil */
+  --forest:         #201710;   /* bark brown, main surface */
+  --forest-mid:     #2e2016;   /* medium bark, borders */
+  --forest-hover:   #3a2b1c;   /* lighter bark, hover state */
+  --forest-light:   #6b5040;   /* weathered driftwood, muted elements */
+
+  /* Amber — dappled sunlight filtering through the canopy */
+  --gold:           #c4923a;
+  --gold-dim:       rgba(196, 146, 58, 0.15);
+  --gold-border:    rgba(196, 146, 58, 0.3);
+
+  /* Text — warm parchment tones */
+  --cream:          #e8d5b8;   /* warm parchment */
+  --sage:           #8fa872;   /* lichen / fern */
+  --text-muted:     #7a6a52;   /* weathered earth */
+
+  /* Status — naturalistic, not neon */
+  --good:           #7aaa62;   /* healthy plant green */
+  --warn:           #c4923a;   /* amber, same as gold */
+  --bad:            #b06060;   /* brick / dried blood */
+
+  --background: var(--forest-dark);
+  --foreground: var(--cream);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0c0a09;
-    --foreground: #fafaf9;
-  }
+  --font-sans: var(--font-montserrat);
+  --font-heading: var(--font-josefin);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--forest-dark);
+  color: var(--cream);
+  font-family: var(--font-montserrat), system-ui, sans-serif;
 }
 
-/* Custom scrollbar for tables */
-.overflow-x-auto::-webkit-scrollbar {
-  height: 8px;
-}
-
-.overflow-x-auto::-webkit-scrollbar-track {
-  background: #e7e5e4;
-  border-radius: 4px;
-}
-
-.overflow-x-auto::-webkit-scrollbar-thumb {
-  background: #a8a29e;
-  border-radius: 4px;
-}
-
-.overflow-x-auto::-webkit-scrollbar-thumb:hover {
-  background: #78716c;
-}
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--forest-mid); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--forest-light); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--sage); }

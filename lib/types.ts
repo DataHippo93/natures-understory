@@ -18,6 +18,31 @@ export interface QuietScore {
   hour: number;
   score: number; // 0-10, higher = quieter
   label: 'peak' | 'light' | 'quiet';
+  transactions: number; // raw transaction count for the hour
+  hourlySales: number;  // net sales dollars for the hour
+}
+
+export interface RosterEntry {
+  employeeId: string;
+  employeeName: string;
+  department: string;
+  shiftStart: string;   // ISO8601
+  shiftEnd: string;     // ISO8601
+  scheduledHours: number;
+  actualHours: number | null; // null = not yet clocked out
+  clockedIn: boolean;
+  isActual: boolean;    // true = timecard exists, false = projection only
+}
+
+export interface RosterDay {
+  date: string; // YYYY-MM-DD
+  categories: {
+    name: string;
+    entries: RosterEntry[];
+  }[];
+  totalScheduledHours: number;
+  totalActualHours: number;
+  totalScheduledCost: number;
 }
 
 export interface DayOfWeekBreakdown {
@@ -34,6 +59,7 @@ export interface LaborActuals {
   fullyLoadedCost: number;
   netSales: number;
   laborRatio: number;
+  hasLaborData: boolean;
 }
 
 export interface LaborProjection {

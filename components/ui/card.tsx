@@ -2,26 +2,29 @@ import { cn } from '@/lib/utils';
 
 interface CardProps extends React.HTMLAttributes<HTMLDivElement> {}
 
-export function Card({ className, ...props }: CardProps) {
+export function Card({ className, style, ...props }: CardProps) {
   return (
     <div
-      className={cn(
-        'rounded-xl border border-stone-200 bg-white shadow-sm dark:border-stone-800 dark:bg-stone-950',
-        className
-      )}
+      className={cn('rounded-lg', className)}
+      style={{
+        background: 'var(--forest)',
+        border: '1px solid var(--forest-mid)',
+        ...style,
+      }}
       {...props}
     />
   );
 }
 
 export function CardHeader({ className, ...props }: CardProps) {
-  return <div className={cn('flex flex-col space-y-1.5 p-6', className)} {...props} />;
+  return <div className={cn('flex flex-col space-y-1 p-5', className)} {...props} />;
 }
 
-export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
+export function CardTitle({ className, style, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
   return (
     <h3
-      className={cn('text-lg font-semibold leading-none tracking-tight', className)}
+      className={cn('text-xs font-bold uppercase tracking-widest', className)}
+      style={{ color: 'var(--gold)', fontFamily: 'var(--font-josefin)', ...style }}
       {...props}
     />
   );
@@ -29,10 +32,14 @@ export function CardTitle({ className, ...props }: React.HTMLAttributes<HTMLHead
 
 export function CardDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
   return (
-    <p className={cn('text-sm text-stone-500 dark:text-stone-400', className)} {...props} />
+    <p
+      className={cn('text-xs', className)}
+      style={{ color: 'var(--text-muted)' }}
+      {...props}
+    />
   );
 }
 
 export function CardContent({ className, ...props }: CardProps) {
-  return <div className={cn('p-6 pt-0', className)} {...props} />;
+  return <div className={cn('p-5 pt-0', className)} {...props} />;
 }

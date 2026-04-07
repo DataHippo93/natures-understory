@@ -25,14 +25,17 @@ export function formatHour(hour: number): string {
   return `${hour - 12}pm`;
 }
 
+// Parse YYYY-MM-DD as local noon to avoid timezone-offset date shifting
+function parseDateLocal(dateString: string): Date {
+  return new Date(dateString + 'T12:00:00');
+}
+
 export function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return parseDateLocal(dateString).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 export function formatDateFull(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString('en-US', {
+  return parseDateLocal(dateString).toLocaleDateString('en-US', {
     weekday: 'short',
     month: 'short',
     day: 'numeric',

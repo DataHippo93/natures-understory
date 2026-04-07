@@ -1,6 +1,5 @@
 'use client';
 
-import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 
 interface KPICardProps {
@@ -12,50 +11,56 @@ interface KPICardProps {
   icon?: React.ReactNode;
 }
 
+const valueColors = {
+  good:    'var(--good)',
+  warning: 'var(--warn)',
+  bad:     'var(--bad)',
+  neutral: 'var(--cream)',
+};
+
 export function KPICard({ title, value, subtitle, change, status = 'neutral', icon }: KPICardProps) {
-  const statusColors = {
-    good: 'text-emerald-600 dark:text-emerald-400',
-    warning: 'text-amber-600 dark:text-amber-400',
-    bad: 'text-red-600 dark:text-red-400',
-    neutral: 'text-stone-600 dark:text-stone-400',
-  };
-
-  const bgColors = {
-    good: 'bg-emerald-50 dark:bg-emerald-950/30',
-    warning: 'bg-amber-50 dark:bg-amber-950/30',
-    bad: 'bg-red-50 dark:bg-red-950/30',
-    neutral: 'bg-stone-50 dark:bg-stone-900/30',
-  };
-
   return (
-    <Card className={cn('relative overflow-hidden', bgColors[status])}>
-      <CardContent className="p-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-stone-500 dark:text-stone-400">{title}</p>
-            <p className={cn('text-3xl font-bold', statusColors[status])}>{value}</p>
-            {subtitle && (
-              <p className="text-sm text-stone-500 dark:text-stone-400">{subtitle}</p>
-            )}
-            {change !== undefined && (
-              <p
-                className={cn(
-                  'text-sm font-medium',
-                  change >= 0 ? 'text-emerald-600' : 'text-red-600'
-                )}
-              >
-                {change >= 0 ? '+' : ''}
-                {change.toFixed(1)}% vs last week
-              </p>
-            )}
-          </div>
-          {icon && (
-            <div className={cn('rounded-lg p-2', bgColors[status])}>
-              {icon}
-            </div>
+    <div
+      className="rounded-lg p-4"
+      style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}
+    >
+      <div className="flex items-start justify-between">
+        <div className="space-y-1 min-w-0">
+          <p
+            className="text-[10px] font-bold uppercase tracking-widest truncate"
+            style={{ color: 'var(--sage)', fontFamily: 'var(--font-josefin)' }}
+          >
+            {title}
+          </p>
+          <p
+            className="text-3xl font-bold leading-none"
+            style={{ color: valueColors[status], fontFamily: 'var(--font-josefin)' }}
+          >
+            {value}
+          </p>
+          {subtitle && (
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {subtitle}
+            </p>
+          )}
+          {change !== undefined && (
+            <p
+              className="text-xs font-semibold"
+              style={{ color: change >= 0 ? 'var(--good)' : 'var(--bad)' }}
+            >
+              {change >= 0 ? '▲' : '▼'} {Math.abs(change).toFixed(1)}% vs yesterday
+            </p>
           )}
         </div>
-      </CardContent>
-    </Card>
+        {icon && (
+          <div
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ml-3"
+            style={{ background: 'var(--forest-mid)' }}
+          >
+            {icon}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
