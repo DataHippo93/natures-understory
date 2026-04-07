@@ -24,35 +24,30 @@ async function getCategoryData(days: number): Promise<CategoryRow[]> {
   const startStr = start.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const endStr = end.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  const { data, error } = await admin
-    .from('sales_line_items')
-    .select('category_name, net_price_cents, quantity')
-    .gte('sale_date', startStr)
-    .lte('sale_date', endStr);
+  // Aggregate in SQL to avoid the 1000-row Supabase REST cap
+  const sql = `
+    SELECT
+      COALESCE(category_name, 'Uncategorized') AS category_name,
+      SUM(net_price_cents)::bigint AS total_cents,
+      SUM(quantity) AS total_qty
+    FROM sales_line_items
+    WHERE sale_date >= '${startStr}' AND sale_date <= '${endStr}'
+    GROUP BY COALESCE(category_name, 'Uncategorized')
+    ORDER BY total_cents DESC
+  `;
 
+  const { data, error } = await admin.rpc('run_report_query', { query: sql });
   if (error || !data) return [];
 
-  // Aggregate in-memory
-  const map = new Map<string, { revenue: number; items_sold: number }>();
-  for (const row of data) {
-    const key = row.category_name ?? 'Uncategorized';
-    const existing = map.get(key) ?? { revenue: 0, items_sold: 0 };
-    existing.revenue += (row.net_price_cents ?? 0) / 100;
-    existing.items_sold += row.quantity ?? 1;
-    map.set(key, existing);
-  }
+  const agg = data as Array<{ category_name: string; total_cents: number; total_qty: number }>;
+  const total = agg.reduce((s, r) => s + (r.total_cents ?? 0) / 100, 0);
 
-  const total = Array.from(map.values()).reduce((s, v) => s + v.revenue, 0);
-  const rows: CategoryRow[] = Array.from(map.entries())
-    .map(([category_name, v]) => ({
-      category_name,
-      revenue: v.revenue,
-      items_sold: v.items_sold,
-      pct: total > 0 ? (v.revenue / total) * 100 : 0,
-    }))
-    .sort((a, b) => b.revenue - a.revenue);
-
-  return rows;
+  return agg.map((r) => ({
+    category_name: r.category_name,
+    revenue: (r.total_cents ?? 0) / 100,
+    items_sold: Number(r.total_qty ?? 0),
+    pct: total > 0 ? ((r.total_cents ?? 0) / 100 / total) * 100 : 0,
+  }));
 }
 
 export default async function CategorySalesPage({

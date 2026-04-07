@@ -71,10 +71,14 @@ export async function POST(req: NextRequest) {
             : { category_id: null, category_name: null };
 
         const ts = li.createdTime || order.createdTime;
-        const quantity = li.unitQty ?? li.quantity ?? 1;
         const unitPrice = li.price ?? 0;
         const discount = li.discountAmount ?? 0;
-        const netPrice = (unitPrice * quantity) - discount;
+        // Weight-based items store unitQty in thousandths (900 = 0.900 lbs)
+        const rawUnitQty = li.unitQty;
+        const quantity = rawUnitQty != null
+          ? Math.round((rawUnitQty / 1000) * 1000) / 1000
+          : (li.quantity ?? 1);
+        const netPrice = Math.max(0, Math.round(unitPrice * quantity) - discount);
 
         lineItemRows.push({
           id: li.id,

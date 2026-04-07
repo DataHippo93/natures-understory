@@ -190,9 +190,8 @@ export default async function SchedulePage({
                           {cat.entries.map((entry, i) => (
                             <tr
                               key={`${entry.employeeName}-${entry.shiftStart}`}
+                              className="transition-colors hover:bg-[var(--forest-hover)]"
                               style={{ borderBottom: i < cat.entries.length - 1 ? '1px solid var(--forest-mid)' : 'none' }}
-                              onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--forest-hover)')}
-                              onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = 'transparent')}
                             >
                               <td className="py-2.5 font-medium" style={{ color: 'var(--cream)' }}>
                                 {entry.employeeName}

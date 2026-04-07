@@ -63,12 +63,20 @@ export default async function ShiftAnalysisPage({
           <CardDescription>Higher = quieter. Green bars (7+) are ideal for stocking, cleaning, or inventory tasks.</CardDescription>
         </CardHeader>
         <CardContent>
-          <QuietScoreChart data={data.hourlyScores} />
-          <div className="mt-3 flex items-center justify-center gap-6 text-xs" style={{ color: 'var(--sage)' }}>
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full inline-block" style={{ background: '#7aaa62' }} />Quiet (7-10) — Schedule chores</span>
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full inline-block" style={{ background: '#c4923a' }} />Light (4-6) — Normal ops</span>
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full inline-block" style={{ background: '#b06060' }} />Peak (0-3) — All hands</span>
-          </div>
+          {data.hourlyScores.length === 0 ? (
+            <div className="flex h-72 items-center justify-center">
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No transaction data yet for today — check back once the store opens.</p>
+            </div>
+          ) : (
+            <>
+              <QuietScoreChart data={data.hourlyScores} />
+              <div className="mt-3 flex items-center justify-center gap-6 text-xs" style={{ color: 'var(--sage)' }}>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full inline-block" style={{ background: '#7aaa62' }} />Quiet (7-10) — Schedule chores</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full inline-block" style={{ background: '#c4923a' }} />Light (4-6) — Normal ops</span>
+                <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full inline-block" style={{ background: '#b06060' }} />Peak (0-3) — All hands</span>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 

@@ -11,6 +11,7 @@ import {
   nDaysAgoMidnightMs,
 } from './clover';
 import { fetchTimecards, fetchShifts } from './homebase';
+import { createAdminClient } from './supabase/admin';
 
 const LOADED_COST_MULTIPLIER = 1.2;
 const LOCAL_TZ = 'America/New_York';
@@ -32,8 +33,10 @@ export async function getKPIData(): Promise<KPIData> {
     const todayStart = todayMidnightMs(LOCAL_TZ);
     const yesterdayStart = nDaysAgoMidnightMs(1, LOCAL_TZ);
 
+    // Fetch from store open hour today, not midnight — avoids pre-open test transactions
+    const todayOpenMs = todayStart + STORE_OPEN_HOUR * 3_600_000;
     const [todayPayments, yesterdayPayments, laborData] = await Promise.all([
-      fetchPayments(todayStart, now),
+      fetchPayments(todayOpenMs, now),
       fetchPayments(yesterdayStart, todayStart),
       getLaborRatioData(14),
     ]);
@@ -47,6 +50,7 @@ export async function getKPIData(): Promise<KPIData> {
 
     const hourlyScores = computeQuietScores(todayPayments);
     const currentHour = localHour(now, LOCAL_TZ);
+    // No scores yet (store hasn't transacted today) — default to neutral
     const currentScore = hourlyScores.find((h) => h.hour === currentHour) ?? {
       hour: currentHour,
       score: 5,
@@ -74,15 +78,37 @@ export async function getShiftAnalysisData(lookbackDays = 30): Promise<ShiftAnal
   try {
     const now = Date.now();
     const todayStart = todayMidnightMs(LOCAL_TZ);
-    const lookbackStart = nDaysAgoMidnightMs(lookbackDays, LOCAL_TZ);
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: LOCAL_TZ });
+    const lookbackStartStr = offsetDateStr(todayStr, -lookbackDays);
 
-    const [todayPayments, historicalPayments] = await Promise.all([
-      fetchPayments(todayStart, now),
-      fetchPayments(lookbackStart, todayStart),
-    ]);
-
+    // Today's live hourly scores — Clover (real-time, small date range)
+    const todayOpenMs = todayStart + STORE_OPEN_HOUR * 3_600_000;
+    const todayPayments = await fetchPayments(todayOpenMs, now);
     const hourlyScores = computeQuietScores(todayPayments);
-    const dayOfWeekBreakdown = computeDowBreakdown(historicalPayments);
+
+    // DOW breakdown — Supabase (already synced daily, no Clover rate-limit risk)
+    const admin = createAdminClient();
+    let dayOfWeekBreakdown: DayOfWeekBreakdown[];
+
+    if (admin) {
+      // Aggregate counts in SQL — returns ≤(days×13) rows, no 1000-row cap issue
+      const sql = `
+        SELECT sale_date, sale_hour, COUNT(*)::int AS tx_count
+        FROM sales_line_items
+        WHERE sale_date >= '${lookbackStartStr}' AND sale_date < '${todayStr}'
+          AND sale_hour BETWEEN ${STORE_OPEN_HOUR} AND ${STORE_CLOSE_HOUR}
+        GROUP BY sale_date, sale_hour
+        ORDER BY sale_date, sale_hour
+      `;
+      const { data: rows } = await admin.rpc('run_report_query', { query: sql });
+      const typed = (rows ?? []) as Array<{ sale_date: string; sale_hour: number; tx_count: number }>;
+      dayOfWeekBreakdown = computeDowBreakdownFromRows(typed);
+    } else {
+      // No Supabase — fall back to Clover historical fetch
+      const lookbackStart = nDaysAgoMidnightMs(lookbackDays, LOCAL_TZ);
+      const historicalPayments = await fetchPayments(lookbackStart, todayStart);
+      dayOfWeekBreakdown = computeDowBreakdown(historicalPayments);
+    }
 
     return { hourlyScores, dayOfWeekBreakdown, lookbackDays };
   } catch (err) {
@@ -297,6 +323,9 @@ export async function getRosterData(dateStr?: string): Promise<import('./types')
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function computeQuietScores(payments: import('./clover').CloverPayment[]): QuietScore[] {
+  // No transactions yet today — return empty so the UI can show a "no data" state
+  if (payments.length === 0) return [];
+
   const hourCounts: Record<number, number> = {};
   const hourSales: Record<number, number> = {};
   for (let h = STORE_OPEN_HOUR; h <= STORE_CLOSE_HOUR; h++) {
@@ -328,6 +357,61 @@ function computeQuietScores(payments: import('./clover').CloverPayment[]): Quiet
       transactions: count,
       hourlySales: Math.round((hourSales[h] ?? 0) * 100) / 100,
     } as QuietScore;
+  });
+}
+
+/** DOW breakdown from pre-aggregated Supabase rows (sale_date, sale_hour, tx_count) */
+function computeDowBreakdownFromRows(
+  rows: Array<{ sale_date: string; sale_hour: number; tx_count: number }>
+): DayOfWeekBreakdown[] {
+  // Build daily hour-count map from pre-aggregated counts
+  const dailyHourCounts: Record<string, Record<number, number>> = {};
+  for (const row of rows) {
+    if (!dailyHourCounts[row.sale_date]) dailyHourCounts[row.sale_date] = {};
+    dailyHourCounts[row.sale_date][row.sale_hour] = row.tx_count;
+  }
+
+  // Score each hour relative to that day's traffic, then average by DOW
+  const dowHourScores: Record<number, Record<number, number[]>> = {};
+  for (const [dateStr, hourCounts] of Object.entries(dailyHourCounts)) {
+    const dow = new Date(dateStr + 'T12:00:00').getDay();
+    const counts = Object.values(hourCounts);
+    const minC = Math.min(...counts, 0);
+    const maxC = Math.max(...counts, 1);
+    const range = maxC - minC;
+
+    for (const [hourStr, count] of Object.entries(hourCounts)) {
+      const score = range === 0 ? 8 : (10 * (maxC - count)) / range;
+      const h = parseInt(hourStr);
+      if (!dowHourScores[dow]) dowHourScores[dow] = {};
+      if (!dowHourScores[dow][h]) dowHourScores[dow][h] = [];
+      dowHourScores[dow][h].push(score);
+    }
+  }
+
+  return DOW_NAMES.map((day, dow) => {
+    const hourScores = dowHourScores[dow] ?? {};
+    const avgByHour: Record<number, number> = {};
+    for (const [hourStr, scores] of Object.entries(hourScores)) {
+      avgByHour[parseInt(hourStr)] = scores.reduce((s, v) => s + v, 0) / scores.length;
+    }
+
+    const allScores = Object.values(avgByHour);
+    const avgQuietScore =
+      allScores.length > 0
+        ? Math.round((allScores.reduce((s, v) => s + v, 0) / allScores.length) * 10) / 10
+        : 5;
+
+    // Show top 3 quietest and top 3 busiest hours rather than using fixed thresholds,
+    // so there's always something meaningful to display regardless of score distribution.
+    const sorted = Object.entries(avgByHour)
+      .map(([h, s]) => ({ h: parseInt(h), s }))
+      .sort((a, b) => b.s - a.s);
+
+    const bestHours = sorted.slice(0, 3).filter(({ s }) => s >= 6).map(({ h }) => h).sort((a, b) => a - b);
+    const peakHours = sorted.slice(-3).filter(({ s }) => s < 5).map(({ h }) => h).sort((a, b) => a - b);
+
+    return { day, avgQuietScore, bestHours, peakHours };
   });
 }
 

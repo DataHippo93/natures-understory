@@ -24,43 +24,51 @@ async function getItemData(days: number, categoryFilter: string | null): Promise
   const startStr = start.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const endStr = end.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  let query = admin
-    .from('sales_line_items')
-    .select('item_name, category_name, net_price_cents, quantity')
-    .gte('sale_date', startStr)
-    .lte('sale_date', endStr);
+  // Aggregate in SQL to avoid the 1000-row Supabase REST cap
+  const categoryClause = categoryFilter
+    ? `AND category_name = '${categoryFilter.replace(/'/g, "''")}'`
+    : '';
 
-  if (categoryFilter) {
-    query = query.eq('category_name', categoryFilter);
-  }
+  const sql = `
+    SELECT
+      COALESCE(item_name, 'Unknown') AS item_name,
+      MAX(category_name) AS category_name,
+      SUM(net_price_cents)::bigint AS total_cents,
+      SUM(quantity) AS total_qty
+    FROM sales_line_items
+    WHERE sale_date >= '${startStr}' AND sale_date <= '${endStr}'
+    ${categoryClause}
+    GROUP BY COALESCE(item_name, 'Unknown')
+    ORDER BY total_cents DESC
+    LIMIT 500
+  `;
 
-  const { data, error } = await query;
+  const catSql = `
+    SELECT DISTINCT category_name
+    FROM sales_line_items
+    WHERE sale_date >= '${startStr}' AND sale_date <= '${endStr}'
+      AND category_name IS NOT NULL
+    ORDER BY category_name
+  `;
 
-  if (error || !data) return { items: [], categories: [] };
+  const [itemRes, catRes] = await Promise.all([
+    admin.rpc('run_report_query', { query: sql }),
+    admin.rpc('run_report_query', { query: catSql }),
+  ]);
 
-  // Aggregate by item
-  const map = new Map<string, { revenue: number; items_sold: number; category_name: string | null }>();
-  const categorySet = new Set<string>();
+  if (itemRes.error || !itemRes.data) return { items: [], categories: [] };
 
-  for (const row of data) {
-    const key = row.item_name ?? 'Unknown';
-    const existing = map.get(key) ?? { revenue: 0, items_sold: 0, category_name: row.category_name };
-    existing.revenue += (row.net_price_cents ?? 0) / 100;
-    existing.items_sold += row.quantity ?? 1;
-    map.set(key, existing);
-    if (row.category_name) categorySet.add(row.category_name);
-  }
+  const agg = itemRes.data as Array<{ item_name: string; category_name: string | null; total_cents: number; total_qty: number }>;
+  const items: ItemRow[] = agg.map((r) => ({
+    item_name: r.item_name,
+    category_name: r.category_name,
+    revenue: (r.total_cents ?? 0) / 100,
+    items_sold: Number(r.total_qty ?? 0),
+  }));
 
-  const items: ItemRow[] = Array.from(map.entries())
-    .map(([item_name, v]) => ({
-      item_name,
-      category_name: v.category_name,
-      revenue: v.revenue,
-      items_sold: v.items_sold,
-    }))
-    .sort((a, b) => b.revenue - a.revenue);
-
-  const categories = Array.from(categorySet).sort();
+  const categories = catRes.error || !catRes.data
+    ? []
+    : (catRes.data as Array<{ category_name: string }>).map((r) => r.category_name).sort();
 
   return { items, categories };
 }

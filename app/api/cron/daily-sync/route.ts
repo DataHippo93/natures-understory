@@ -99,9 +99,16 @@ async function syncDay(
           : { category_id: null, category_name: null };
 
       const ts = li.createdTime || order.createdTime;
-      const quantity = li.unitQty ?? li.quantity ?? 1;
       const unitPrice = li.price ?? 0;
       const discount = li.discountAmount ?? 0;
+
+      // Clover weight-based items store unitQty in thousandths (900 = 0.900 lbs).
+      // Packaged/count items have unitQty undefined; those are always quantity 1.
+      const rawUnitQty = li.unitQty;
+      const quantity = rawUnitQty != null
+        ? Math.round((rawUnitQty / 1000) * 1000) / 1000  // e.g. 10050 → 10.050
+        : (li.quantity ?? 1);
+      const netPrice = Math.max(0, Math.round(unitPrice * quantity) - discount);
 
       rows.push({
         id: li.id,
@@ -113,7 +120,7 @@ async function syncDay(
         quantity,
         unit_price_cents: unitPrice,
         discount_cents: discount,
-        net_price_cents: Math.max(0, unitPrice * quantity - discount),
+        net_price_cents: netPrice,
         sale_date: localDateStr(ts, LOCAL_TZ),
         sale_hour: localHour(ts, LOCAL_TZ),
         sale_ts: new Date(ts).toISOString(),

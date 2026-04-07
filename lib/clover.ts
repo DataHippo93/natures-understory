@@ -17,6 +17,19 @@ function getCreds() {
   return { mid, token };
 }
 
+/** Fetch with exponential backoff on 429 rate-limit responses */
+async function fetchWithRetry(url: string, init: RequestInit, retries = 4): Promise<Response> {
+  let delay = 500;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 || attempt === retries) return res;
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 2, 8000);
+  }
+  // unreachable, but satisfies TS
+  return fetch(url, init);
+}
+
 export async function fetchPayments(startMs: number, endMs: number): Promise<CloverPayment[]> {
   const { mid, token } = getCreds();
   const payments: CloverPayment[] = [];
@@ -32,7 +45,7 @@ export async function fetchPayments(startMs: number, endMs: number): Promise<Clo
     params.append('offset', String(offset));
     params.append('orderBy', 'createdTime ASC');
 
-    const res = await fetch(`${CLOVER_BASE}/${mid}/payments?${params}`, {
+    const res = await fetchWithRetry(`${CLOVER_BASE}/${mid}/payments?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
       next: { revalidate: 300 },
     });
@@ -135,7 +148,7 @@ export interface CloverOrder {
 
 export async function fetchCategories(): Promise<CloverCategory[]> {
   const { mid, token } = getCreds();
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${CLOVER_BASE}/${mid}/categories?limit=1000&orderBy=sortOrder`,
     { headers: { Authorization: `Bearer ${token}` }, next: { revalidate: 3600 } }
   );
@@ -154,7 +167,7 @@ export async function fetchItems(): Promise<CloverItem[]> {
   let offset = 0;
   const limit = 1000;
   while (true) {
-    const res = await fetch(
+    const res = await fetchWithRetry(
       `${CLOVER_BASE}/${mid}/items?limit=${limit}&offset=${offset}&expand=categories&filter=hidden=false`,
       { headers: { Authorization: `Bearer ${token}` }, next: { revalidate: 3600 } }
     );
@@ -197,7 +210,7 @@ export async function fetchOrdersWithLineItems(startMs: number, endMs: number): 
     params.append('offset', String(offset));
     params.append('orderBy', 'createdTime ASC');
 
-    const res = await fetch(`${CLOVER_BASE}/${mid}/orders?${params}`, {
+    const res = await fetchWithRetry(`${CLOVER_BASE}/${mid}/orders?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
