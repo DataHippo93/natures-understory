@@ -105,10 +105,13 @@ async function syncDay(
       // Clover weight-based items store unitQty in thousandths (900 = 0.900 lbs).
       // Packaged/count items have unitQty undefined; those are always quantity 1.
       const rawUnitQty = li.unitQty;
-      const quantity = rawUnitQty != null
+      const quantityDecimal = rawUnitQty != null
         ? Math.round((rawUnitQty / 1000) * 1000) / 1000  // e.g. 10050 → 10.050
         : (li.quantity ?? 1);
-      const netPrice = Math.max(0, Math.round(unitPrice * quantity) - discount);
+      const netPrice = Math.max(0, Math.round(unitPrice * quantityDecimal) - discount);
+      // TODO: apply migration 002_fix_quantity_type.sql in Supabase SQL Editor to store
+      // decimal quantities; until then we round to int so inserts don't fail.
+      const quantity = Math.max(1, Math.round(quantityDecimal));
 
       rows.push({
         id: li.id,

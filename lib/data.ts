@@ -271,17 +271,32 @@ export async function getRosterData(dateStr?: string): Promise<import('./types')
     fetchTimecards(date, date).catch(() => []),
   ]);
 
-  // Build a map of employee timecards for the day
-  const timecardMap: Record<string, import('./homebase').Timecard> = {};
+  // Group timecards by employee — one person may have multiple cards in a day
+  // (e.g. clocked in for a morning Front End shift then an afternoon Office shift)
+  const timecardsByEmployee: Record<string, import('./homebase').Timecard[]> = {};
   for (const tc of timecards) {
-    // Key by employee name (best we have without a stable employee ID cross-ref)
-    timecardMap[tc.employeeName] = tc;
+    if (!timecardsByEmployee[tc.employeeName]) timecardsByEmployee[tc.employeeName] = [];
+    timecardsByEmployee[tc.employeeName].push(tc);
   }
 
   const entries: import('./types').RosterEntry[] = shifts.map((shift) => {
-    const tc = timecardMap[shift.employeeName];
-    const actualHours = tc
-      ? Math.round((tc.regularHours + tc.overtimeHours) * 100) / 100
+    const employeeCards = timecardsByEmployee[shift.employeeName] ?? [];
+
+    // Match this shift to the timecard whose clock-in is closest to the shift start,
+    // capped at a 2-hour window so we never cross-assign cards between shifts.
+    const shiftStartMs = new Date(shift.startAt).getTime();
+    let bestTc: import('./homebase').Timecard | null = null;
+    let bestDelta = Infinity;
+    for (const tc of employeeCards) {
+      const delta = Math.abs(new Date(tc.clockedInAt).getTime() - shiftStartMs);
+      if (delta < bestDelta && delta < 2 * 3_600_000) {
+        bestDelta = delta;
+        bestTc = tc;
+      }
+    }
+
+    const actualHours = bestTc
+      ? Math.round((bestTc.regularHours + bestTc.overtimeHours) * 100) / 100
       : null;
 
     return {
@@ -292,8 +307,8 @@ export async function getRosterData(dateStr?: string): Promise<import('./types')
       shiftEnd: shift.endAt,
       scheduledHours: Math.round(shift.scheduledHours * 100) / 100,
       actualHours,
-      clockedIn: tc != null && !tc.clockedOutAt,
-      isActual: tc != null,
+      clockedIn: bestTc != null && !bestTc.clockedOutAt,
+      isActual: bestTc != null,
     };
   });
 

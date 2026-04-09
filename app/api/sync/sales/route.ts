@@ -75,10 +75,12 @@ export async function POST(req: NextRequest) {
         const discount = li.discountAmount ?? 0;
         // Weight-based items store unitQty in thousandths (900 = 0.900 lbs)
         const rawUnitQty = li.unitQty;
-        const quantity = rawUnitQty != null
+        const quantityDecimal = rawUnitQty != null
           ? Math.round((rawUnitQty / 1000) * 1000) / 1000
           : (li.quantity ?? 1);
-        const netPrice = Math.max(0, Math.round(unitPrice * quantity) - discount);
+        const netPrice = Math.max(0, Math.round(unitPrice * quantityDecimal) - discount);
+        // TODO: apply migration 002_fix_quantity_type.sql to store decimal quantities
+        const quantity = Math.max(1, Math.round(quantityDecimal));
 
         lineItemRows.push({
           id: li.id,
