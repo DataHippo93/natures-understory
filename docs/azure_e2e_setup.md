@@ -1,126 +1,111 @@
 # Azure E2E Setup — Runbook
 
 This document captures the one-time human steps required to make the
-new `e2e-azure` workflow go green. Mirrors the pattern adk-makerhub
-already uses; do not invent new resources without checking what
-makerhub set up.
+new `e2e-azure` workflow go green. Updated with concrete values from the
+Cowork-driven provisioning run on 2026-05-04.
+
+## What's already provisioned (Cowork agent did this)
+
+### Azure
+| Resource | Value |
+|---|---|
+| Subscription | `4c8cb21c-80d2-4a5b-8e78-bb3d63dd9e12` (Pay-As-You-Go, tenant `7df011e1-eb7e-46bc-b4f8-9ea223936cc6`) |
+| Resource group | `ycc-general` (westus) |
+| Playwright Workspace | `natures-understory-tests` (eastus) |
+| Workspace ID | `1a88742e-ea29-49a4-8ff4-8e7664036e9d` |
+| Service URL | `wss://eastus.api.playwright.microsoft.com/playwrightworkspaces/1a88742e-ea29-49a4-8ff4-8e7664036e9d/browsers` |
+| Shared trace storage (reused from makerhub) | `pwstrgyccgeneral5b0f` (no role assignment yet — only needed if we wire the storage-side trace upload; the workspace already accepts traces via the service reporter) |
+
+### GitHub (env: `Production`)
+Already set as **secrets**:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `AZURE_TENANT_ID` (set in case we add OIDC later)
+- `AZURE_SUBSCRIPTION_ID` (same)
+
+Already set as **variables** (visible in plain text):
+- `PLAYWRIGHT_SERVICE_URL` (the wss:// above)
+- `PLAYWRIGHT_TEST_BASE_URL` = `https://natures-understory.vercel.app`
+
+## What Clark still needs to do (two human-only steps)
+
+### Step 1 — Generate Playwright Workspace access token
+
+The Cowork SP doesn't have permission to call the Playwright dataplane
+(needs admin consent for the Microsoft Playwright service principal in
+the YC Consulting tenant). So this is a portal step.
+
+1. Go to https://playwright.microsoft.com (sign in as cmaine@ycconsulting.biz).
+2. Switch to the `natures-understory-tests` workspace (workspace selector
+   in the top nav). If you don't see it, refresh — it was created
+   2026-05-04.
+3. Settings → **Access tokens** → **Generate new token**.
+   - Name: `github-actions-prod`
+   - Lifetime: 90 days (or per your rotation policy)
+4. Copy the token value. Send it back to Cowork in the chat
+   (this is a secure channel) — Cowork will set the GitHub secret
+   `PLAYWRIGHT_SERVICE_ACCESS_TOKEN` for you. Don't paste it anywhere
+   else.
+
+### Step 2 — Create the dedicated `e2e@` Supabase user
+
+In the Understory Supabase project (`yvbsibrikylbqupignij`):
+1. Dashboard → Authentication → Users → Add user.
+2. Email: `e2e@natures-understory.local`
+3. Password: 32+ char random — `openssl rand -hex 24` works.
+4. Auto-confirm: yes.
+5. Store the password in BWS as `NATURES_UNDERSTORY_E2E_USER_PASSWORD`.
+6. Tell Cowork the BWS key name; Cowork will pull from BWS and set the
+   GitHub secrets `E2E_USER_EMAIL` + `E2E_USER_PASSWORD`.
+
+That's it. Once both are done, Cowork triggers
+`gh workflow run e2e-azure.yml --ref chore/azure-e2e-setup` and
+reports the run URL.
+
+## Optional follow-up — migrate to OIDC
+
+The current setup uses a workspace access token (90-day rotation). To
+move to long-lived-credential-free OIDC:
+1. Create an Azure App Registration `natures-understory-github` (needs
+   Entra Application Administrator — Cowork SP doesn't have it).
+2. Add federated credentials trusting
+   `repo:DataHippo93/natures-understory:environment:Production`.
+3. Assign the new SP `Contributor` on the Playwright Workspace (and
+   `Storage Blob Data Contributor` on `pwstrgyccgeneral5b0f` if/when we
+   wire storage-side trace uploads).
+4. Set the GitHub secret `AZURE_CLIENT_ID` to the new SP's app id.
+5. Update `.github/workflows/e2e-azure.yml` to add `id-token: write`
+   permission and an `azure/login@v2` step before the playwright run;
+   update `playwright.service.config.ts` to use `serviceAuthType:
+   'ENTRA_ID'` in the `getServiceConfig` options (or unset the access
+   token env var).
+6. Delete the access token in the Playwright portal.
+
+The `scripts/setup_azure_e2e.sh` helper has the exact commands. Run as
+yourself (`az login` interactively first).
 
 ## What this branch ships (`chore/azure-e2e-setup`)
 
 | File | Purpose |
 |---|---|
-| `tests/homepage.spec.ts` | Three smoke tests: 2xx response, redirect to /login, page title |
-| `tests/auth.spec.ts` | Three smoke tests: form renders, brand chrome, invalid creds error |
-| `tests/fixtures/auth.ts` | Playwright fixture: signs the test user in via Supabase Auth REST + injects the SSR cookie |
-| `playwright.service.config.ts` | Wraps `playwright.config.ts` to point browsers at Microsoft Playwright Workspaces, force `trace: 'on'`, and disable the local dev-server |
-| `.github/workflows/e2e-azure.yml` | New workflow — runs Playwright on Azure-hosted browsers, uploads traces, gated on the `production` GitHub Environment |
-| `supabase/migrations/006_e2e_test_user_seed.sql` | Documentation-only — explains how to provision the `e2e@` user (Supabase Auth users can't be created via SQL migration) |
+| `tests/homepage.spec.ts` | 3 smoke tests (200, redirect, title) |
+| `tests/auth.spec.ts` | 3 smoke tests (form, brand, error) |
+| `tests/fixtures/auth.ts` | Supabase Auth sign-in fixture |
+| `playwright.service.config.ts` | Wraps base config for Microsoft Playwright Workspaces |
+| `.github/workflows/e2e-azure.yml` | Workflow gated on `Production` environment |
+| `supabase/migrations/006_e2e_test_user_seed.sql` | Docs-only migration |
+| `scripts/setup_azure_e2e.sh` | Optional OIDC-migration helper |
 | `docs/understory_audit_2026-05-03.md` | Companion audit |
 | `docs/azure_e2e_setup.md` | This file |
-| `package.json` | Adds `@azure/microsoft-playwright-testing` dev dep + `test:e2e:azure` script |
+| `package.json` | Adds `@azure/microsoft-playwright-testing` + `test:e2e:azure` script |
 
-## What is intentionally NOT changed
+## What this branch does NOT touch
 
 - `playwright.config.ts` (existing local config) — untouched
 - `e2e/auth.test.ts` (existing local-CI suite) — untouched
 - `.github/workflows/ci.yml` (existing build/deploy pipeline) — untouched
 - All produce-buying WIP files sitting on `main` — untouched
 
-The Azure workflow runs **in addition to** the existing CI; it doesn't
-replace anything. Once it's been green for a week, the `e2e` job in
-`ci.yml` can be deleted in a follow-up.
-
-## Clark-only steps before the workflow can go green
-
-These cannot be done from inside an unsupervised Cowork session — they
-require Clark's hands on the Azure portal, Supabase dashboard, and
-GitHub repo settings. The list assumes adk-makerhub already has all of
-this provisioned, so most of it is "copy the values."
-
-### 1. Reuse or create the Azure resources
-
-If reusing makerhub's setup (recommended — single source of truth):
-- Confirm the Microsoft Playwright Workspaces account has a "Tester"
-  role assignment for the same OIDC service principal makerhub uses.
-- Confirm the storage account `pwstrgyccgeneral5b0f` has a "Storage
-  Blob Data Contributor" role assignment for that SP. (No new role
-  assignment needed.)
-
-If a separate setup is preferred for Understory:
-- Create a new Playwright Workspace in the same Azure subscription.
-- Create a new app registration / OIDC service principal with federated
-  credentials targeting `repo:Clark/natures-understory:environment:production`.
-- Assign the SP "Storage Blob Data Contributor" on `pwstrgyccgeneral5b0f`
-  (or a fresh storage account, but reuse if possible to keep one trace
-  bucket per org).
-- Assign the SP "Tester" on the new Playwright Workspace.
-
-### 2. Create the dedicated `e2e@` Supabase user
-
-In the Understory Supabase project (`yvbsibrikylbqupignij`):
-- Dashboard → Authentication → Users → Add user
-- Email: `e2e@natures-understory.local`
-- Password: 32+ char random — generate via `openssl rand -hex 24`
-- Auto-confirm: yes
-- (Optional) user_metadata: `{ "role": "store_associate" }` so RLS
-  treats it like a regular store associate, not an admin.
-
-Store the password in BWS as `NATURES_UNDERSTORY_E2E_USER_PASSWORD`.
-
-### 3. Set up the GitHub `production` Environment
-
-Repo Settings → Environments → New environment → name: `production`.
-
-Add **Environment secrets**:
-| Secret | Value source |
-|---|---|
-| `AZURE_CLIENT_ID` | Azure portal → App registrations → SP → Overview |
-| `AZURE_TENANT_ID` | same |
-| `AZURE_SUBSCRIPTION_ID` | Azure portal → Subscriptions |
-| `PLAYWRIGHT_SERVICE_URL` | Playwright Workspaces portal → "Add region endpoint" snippet |
-| `PLAYWRIGHT_SERVICE_ACCESS_TOKEN` | Playwright Workspaces portal → access tokens (or use Entra ID + delete this secret) |
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://yvbsibrikylbqupignij.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase Dashboard → Project Settings → API |
-| `E2E_USER_EMAIL` | `e2e@natures-understory.local` |
-| `E2E_USER_PASSWORD` | from BWS (step 2) |
-
-Add **Environment variable** (NOT a secret — the workflow reads via `vars.`):
-| Variable | Value |
-|---|---|
-| `PLAYWRIGHT_TEST_BASE_URL` | `https://natures-understory.vercel.app` (or per-PR preview URL via Vercel-GitHub integration) |
-
-(Optional) Add a deployment branch rule limiting `production` to
-`main` + the `chore/azure-e2e-setup` branch so PRs from forks can't
-exfiltrate the secrets.
-
-### 4. Trigger the first run
-
-```bash
-gh workflow run e2e-azure.yml --ref chore/azure-e2e-setup
-gh run list --workflow=e2e-azure.yml --limit 1
-gh run watch
-```
-
-Expected outcome: 6/6 specs green, traces uploaded to the Playwright
-Workspaces dashboard under the run ID `<gh_run_id>-<attempt>`.
-
-If it fails, the most likely culprits are:
-- `PLAYWRIGHT_SERVICE_URL` missing the workspace ID path segment
-- `PLAYWRIGHT_TEST_BASE_URL` not set as a variable (it's `vars.`, not `secrets.`)
-- OIDC trust missing for the new branch (federated credential subject
-  must include `:environment:production`)
-- The `production` environment not gating on the `azure-e2e` job (check
-  that `environment: production` is on the job)
-
-## After the first green run
-
-1. Update `package.json` script: `"test:e2e:azure": "playwright test --config=playwright.service.config.ts --workers=10"`. Already wired in this branch.
-2. Move the Playwright bits from `e2e/auth.test.ts` into `tests/`, replace the hardcoded `cmaine@ycconsulting.biz` defaults with `requireEnv`, and delete the `e2e` job from `.github/workflows/ci.yml`.
-3. Add deeper specs as the operator UI lands (kickoff buttons, approval flows, etc.) — file naming convention: `tests/<feature>.spec.ts`.
-
-## Why this layout
-
-- **Two configs (local + service)** because we want `npm run test:e2e` to keep working for fast local iteration without a Playwright Workspaces token.
-- **`tests/` is for Azure smoke; `e2e/` is for local full coverage.** Once the test user lands and the rewrite is done, we collapse to one suite under `tests/`.
-- **`production` GitHub Environment, not repo secrets**, so secret access is gated on environment approval rules — no PR from a fork can exfil.
-- **OIDC, not long-lived service principal secrets**, so token rotation is handled by Azure automatically.
+The Azure workflow runs **in addition to** the existing CI; once it has
+been green for a week, the `e2e` job in `ci.yml` can be deleted in a
+follow-up.

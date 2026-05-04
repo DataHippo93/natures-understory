@@ -1,28 +1,27 @@
 # E2E tests on Azure-hosted browsers via Microsoft Playwright Workspaces.
 #
-# Mirrors the adk-makerhub pattern. Reads from GitHub Environment
-# "production" so all secrets are scoped (and so the user has to approve
-# any new secret addition).
+# Workspace: natures-understory-tests (Microsoft.LoadTestService/playwrightworkspaces)
+#   subscription: 4c8cb21c-80d2-4a5b-8e78-bb3d63dd9e12 (Pay-As-You-Go)
+#   resource group: ycc-general
+#   workspace id: 1a88742e-ea29-49a4-8ff4-8e7664036e9d
+#   region: eastus
 #
-# Required environment secrets (set in GitHub repo Settings → Environments
-# → production):
-#   AZURE_CLIENT_ID                 OIDC service principal app id
-#   AZURE_TENANT_ID                 Azure tenant id
-#   AZURE_SUBSCRIPTION_ID           Azure subscription id
-#   PLAYWRIGHT_SERVICE_URL          wss://<region>.api.playwright.microsoft.com/...
-#   PLAYWRIGHT_SERVICE_ACCESS_TOKEN service-principal token (alt: Entra ID)
-#   NEXT_PUBLIC_SUPABASE_URL        Supabase project URL (yvbsibrikylbqupignij)
-#   NEXT_PUBLIC_SUPABASE_ANON_KEY   Supabase anon key
-#   E2E_USER_EMAIL                  e2e@natures-understory test user
-#   E2E_USER_PASSWORD               (paired with above; rotate via BWS)
+# Auth path: WORKSPACE ACCESS TOKEN (not OIDC). Simpler for first-run; the
+# token is generated in the Microsoft Playwright Testing portal and stored
+# as `PLAYWRIGHT_SERVICE_ACCESS_TOKEN` secret. We can migrate to Entra ID
+# OIDC later (would require an SP with Contributor on the workspace, plus
+# federated credentials trusting `repo:DataHippo93/natures-understory:environment:Production`).
 #
-# Required environment variable (set in same Environment, NOT a secret):
-#   PLAYWRIGHT_TEST_BASE_URL        e.g. https://natures-understory.vercel.app
-#                                   or the per-PR Vercel preview URL
+# GitHub Environment "Production" — secrets:
+#   PLAYWRIGHT_SERVICE_ACCESS_TOKEN  generated in Playwright Testing portal
+#   NEXT_PUBLIC_SUPABASE_URL         already set
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY    already set
+#   E2E_USER_EMAIL                   e2e@natures-understory test user
+#   E2E_USER_PASSWORD                (paired with above; rotate via BWS)
 #
-# The Azure RBAC role assignment ("Storage Blob Data Contributor" on
-# storage account `pwstrgyccgeneral5b0f`) is provisioned out-of-band.
-# Mirror whatever makerhub uses; the role lets the OIDC SP upload traces.
+# Variables (vars., not secrets):
+#   PLAYWRIGHT_SERVICE_URL           wss://eastus.api.playwright.microsoft.com/playwrightworkspaces/<ws-id>/browsers
+#   PLAYWRIGHT_TEST_BASE_URL         https://natures-understory.vercel.app
 
 name: E2E (Azure)
 
@@ -34,17 +33,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write       # required for azure/login OIDC
   contents: read
 
 jobs:
   azure-e2e:
     name: Azure-hosted Playwright
     runs-on: ubuntu-latest
-    environment: production
+    environment: Production
     timeout-minutes: 20
     env:
-      PLAYWRIGHT_SERVICE_URL: ${{ secrets.PLAYWRIGHT_SERVICE_URL }}
+      PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL }}
       PLAYWRIGHT_SERVICE_ACCESS_TOKEN: ${{ secrets.PLAYWRIGHT_SERVICE_ACCESS_TOKEN }}
       PLAYWRIGHT_SERVICE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       PLAYWRIGHT_TEST_BASE_URL: ${{ vars.PLAYWRIGHT_TEST_BASE_URL }}
@@ -63,22 +61,11 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      # Azure login via OIDC (no secrets in workflow, just the IDs).
-      # The SP needs Storage Blob Data Contributor on pwstrgyccgeneral5b0f
-      # for trace upload, plus the Playwright Workspaces "Tester" role.
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: Run Playwright on Azure-hosted browsers
         run: |
           npx playwright test \
             --config=playwright.service.config.ts \
             --workers=10
-        # Trace upload happens automatically via the service reporter.
 
       - name: Upload local Playwright report (fallback)
         if: ${{ always() }}
