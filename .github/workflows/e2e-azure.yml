@@ -1,0 +1,76 @@
+# E2E tests on Azure-hosted browsers via Microsoft Playwright Workspaces.
+#
+# Workspace: natures-understory-tests (Microsoft.LoadTestService/playwrightworkspaces)
+#   subscription: 4c8cb21c-80d2-4a5b-8e78-bb3d63dd9e12 (Pay-As-You-Go)
+#   resource group: ycc-general
+#   workspace id: 1a88742e-ea29-49a4-8ff4-8e7664036e9d
+#   region: eastus
+#
+# Auth path: WORKSPACE ACCESS TOKEN (not OIDC). Simpler for first-run; the
+# token is generated in the Microsoft Playwright Testing portal and stored
+# as `PLAYWRIGHT_SERVICE_ACCESS_TOKEN` secret. We can migrate to Entra ID
+# OIDC later (would require an SP with Contributor on the workspace, plus
+# federated credentials trusting `repo:DataHippo93/natures-understory:environment:Production`).
+#
+# GitHub Environment "Production" — secrets:
+#   PLAYWRIGHT_SERVICE_ACCESS_TOKEN  generated in Playwright Testing portal
+#   NEXT_PUBLIC_SUPABASE_URL         already set
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY    already set
+#   E2E_USER_EMAIL                   e2e@natures-understory test user
+#   E2E_USER_PASSWORD                (paired with above; rotate via BWS)
+#
+# Variables (vars., not secrets):
+#   PLAYWRIGHT_SERVICE_URL           wss://eastus.api.playwright.microsoft.com/playwrightworkspaces/<ws-id>/browsers
+#   PLAYWRIGHT_TEST_BASE_URL         https://natures-understory.vercel.app
+
+name: E2E (Azure)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  azure-e2e:
+    name: Azure-hosted Playwright
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL }}
+      PLAYWRIGHT_SERVICE_ACCESS_TOKEN: ${{ secrets.PLAYWRIGHT_SERVICE_ACCESS_TOKEN }}
+      PLAYWRIGHT_SERVICE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      PLAYWRIGHT_TEST_BASE_URL: ${{ vars.PLAYWRIGHT_TEST_BASE_URL }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      E2E_USER_EMAIL: ${{ secrets.E2E_USER_EMAIL }}
+      E2E_USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run Playwright on Azure-hosted browsers
+        run: |
+          npx playwright test \
+            --config=playwright.service.config.ts \
+            --workers=10
+
+      - name: Upload local Playwright report (fallback)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 14
