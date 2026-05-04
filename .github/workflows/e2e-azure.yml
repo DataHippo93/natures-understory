@@ -1,0 +1,89 @@
+# E2E tests on Azure-hosted browsers via Microsoft Playwright Workspaces.
+#
+# Mirrors the adk-makerhub pattern. Reads from GitHub Environment
+# "production" so all secrets are scoped (and so the user has to approve
+# any new secret addition).
+#
+# Required environment secrets (set in GitHub repo Settings → Environments
+# → production):
+#   AZURE_CLIENT_ID                 OIDC service principal app id
+#   AZURE_TENANT_ID                 Azure tenant id
+#   AZURE_SUBSCRIPTION_ID           Azure subscription id
+#   PLAYWRIGHT_SERVICE_URL          wss://<region>.api.playwright.microsoft.com/...
+#   PLAYWRIGHT_SERVICE_ACCESS_TOKEN service-principal token (alt: Entra ID)
+#   NEXT_PUBLIC_SUPABASE_URL        Supabase project URL (yvbsibrikylbqupignij)
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY   Supabase anon key
+#   E2E_USER_EMAIL                  e2e@natures-understory test user
+#   E2E_USER_PASSWORD               (paired with above; rotate via BWS)
+#
+# Required environment variable (set in same Environment, NOT a secret):
+#   PLAYWRIGHT_TEST_BASE_URL        e.g. https://natures-understory.vercel.app
+#                                   or the per-PR Vercel preview URL
+#
+# The Azure RBAC role assignment ("Storage Blob Data Contributor" on
+# storage account `pwstrgyccgeneral5b0f`) is provisioned out-of-band.
+# Mirror whatever makerhub uses; the role lets the OIDC SP upload traces.
+
+name: E2E (Azure)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write       # required for azure/login OIDC
+  contents: read
+
+jobs:
+  azure-e2e:
+    name: Azure-hosted Playwright
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_SERVICE_URL: ${{ secrets.PLAYWRIGHT_SERVICE_URL }}
+      PLAYWRIGHT_SERVICE_ACCESS_TOKEN: ${{ secrets.PLAYWRIGHT_SERVICE_ACCESS_TOKEN }}
+      PLAYWRIGHT_SERVICE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      PLAYWRIGHT_TEST_BASE_URL: ${{ vars.PLAYWRIGHT_TEST_BASE_URL }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      E2E_USER_EMAIL: ${{ secrets.E2E_USER_EMAIL }}
+      E2E_USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      # Azure login via OIDC (no secrets in workflow, just the IDs).
+      # The SP needs Storage Blob Data Contributor on pwstrgyccgeneral5b0f
+      # for trace upload, plus the Playwright Workspaces "Tester" role.
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run Playwright on Azure-hosted browsers
+        run: |
+          npx playwright test \
+            --config=playwright.service.config.ts \
+            --workers=10
+        # Trace upload happens automatically via the service reporter.
+
+      - name: Upload local Playwright report (fallback)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 14
