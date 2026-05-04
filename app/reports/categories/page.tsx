@@ -24,15 +24,18 @@ async function getCategoryData(days: number): Promise<CategoryRow[]> {
   const startStr = start.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const endStr = end.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  // Aggregate in SQL to avoid the 1000-row Supabase REST cap
+  // Read from the Thrive warehouse (thrive_sales_history is daily-grain,
+  // joined to thrive_product_catalog for the department label). Aggregate
+  // in SQL via run_report_query to bypass the 1000-row Supabase REST cap.
   const sql = `
     SELECT
-      COALESCE(category_name, 'Uncategorized') AS category_name,
-      SUM(net_price_cents)::bigint AS total_cents,
-      SUM(quantity) AS total_qty
-    FROM sales_line_items
-    WHERE sale_date >= '${startStr}' AND sale_date <= '${endStr}'
-    GROUP BY COALESCE(category_name, 'Uncategorized')
+      COALESCE(p.department, 'Uncategorized') AS category_name,
+      SUM(s.revenue_cents)::bigint AS total_cents,
+      SUM(s.units)::numeric AS total_qty
+    FROM thrive_sales_history s
+    LEFT JOIN thrive_product_catalog p ON p.thrive_variant_id = s.variant_id
+    WHERE s.sale_date >= '${startStr}' AND s.sale_date <= '${endStr}'
+    GROUP BY COALESCE(p.department, 'Uncategorized')
     ORDER BY total_cents DESC
   `;
 
