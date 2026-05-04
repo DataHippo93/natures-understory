@@ -1,0 +1,74 @@
+# E2E tests on Azure-hosted browsers via Microsoft Playwright Workspaces.
+#
+# Workspace: natures-understory-tests (Microsoft.LoadTestService/playwrightworkspaces)
+#   subscription: 4c8cb21c-80d2-4a5b-8e78-bb3d63dd9e12 (Pay-As-You-Go)
+#   resource group: ycc-general
+#   workspace id: 1a88742e-ea29-49a4-8ff4-8e7664036e9d
+#   region: eastus
+#
+# Auth path: WORKSPACE ACCESS TOKEN (`PLAYWRIGHT_SERVICE_ACCESS_TOKEN`).
+# The token Microsoft Playwright Workspaces issues today carries `pwid`
+# instead of the legacy `aid` claim, so the SDK's local validateMptPAT
+# returns "access token does not match workspace URL". The patch step
+# below rewrites the validation to accept `pwid` as a fallback. Drop it
+# once Microsoft fixes upstream — tracked at TODO-link.
+
+name: E2E (Azure)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  azure-e2e:
+    name: Azure-hosted Playwright
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 20
+    env:
+      PLAYWRIGHT_SERVICE_URL: ${{ vars.PLAYWRIGHT_SERVICE_URL }}
+      PLAYWRIGHT_SERVICE_ACCESS_TOKEN: ${{ secrets.PLAYWRIGHT_SERVICE_ACCESS_TOKEN }}
+      PLAYWRIGHT_SERVICE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      PLAYWRIGHT_TEST_BASE_URL: ${{ vars.PLAYWRIGHT_TEST_BASE_URL }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      E2E_USER_EMAIL: ${{ secrets.E2E_USER_EMAIL }}
+      E2E_USER_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Patch @azure/microsoft-playwright-testing for pwid token claim
+        run: |
+          set -e
+          F=node_modules/@azure/microsoft-playwright-testing/dist/utils/utils.js
+          # Replace `claims.aid` with `(claims.aid || claims.pwid)` in validateMptPAT
+          sed -i 's/result\.accountId !== claims\.aid/result.accountId !== (claims.aid || claims.pwid)/g' "$F"
+          grep -c "claims.pwid" "$F"
+
+      - name: Run Playwright on Azure-hosted browsers
+        run: |
+          npx playwright test \
+            --config=playwright.service.config.ts \
+            --workers=10
+
+      - name: Upload local Playwright report (fallback)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 14

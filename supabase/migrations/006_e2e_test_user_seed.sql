@@ -1,0 +1,51 @@
+-- Documentation-only migration. Supabase Auth users live in the
+-- `auth.users` table, which is owned by the Supabase platform — you
+-- can't safely INSERT into it from a SQL migration (it'd skip the
+-- password hashing pathway and bypass the GoTrue invariants).
+--
+-- The e2e@ user must be created out-of-band, via one of:
+--
+--   (a) Supabase Dashboard → Authentication → Users → Add user
+--       Email:    e2e@natures-understory.local
+--       Password: <generate 32+ char random; store in BWS as
+--                 NATURES_UNDERSTORY_E2E_USER_PASSWORD>
+--       Auto-confirm: yes
+--
+--   (b) Supabase Auth Admin API:
+--       curl -X POST 'https://yvbsibrikylbqupignij.supabase.co/auth/v1/admin/users' \
+--         -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+--         -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+--         -H "Content-Type: application/json" \
+--         -d '{
+--           "email": "e2e@natures-understory.local",
+--           "password": "<from BWS>",
+--           "email_confirm": true,
+--           "user_metadata": { "full_name": "E2E Test User", "role": "store_associate" }
+--         }'
+--
+-- Once the user exists, the GitHub Environment "production" needs:
+--   E2E_USER_EMAIL    = e2e@natures-understory.local
+--   E2E_USER_PASSWORD = <from BWS>
+--
+-- This migration is idempotent (it does nothing). It exists only so the
+-- on-call engineer who's onboarding finds the runbook in the same place
+-- they look for everything else.
+
+-- If/when a `user_profiles` table is introduced (the architecture doc
+-- mentions one), uncomment + edit the block below to seed a profile row
+-- for the e2e user with role='store_associate'.
+--
+-- do $$
+-- declare
+--   v_user_id uuid;
+-- begin
+--   select id into v_user_id from auth.users
+--    where email = 'e2e@natures-understory.local';
+--   if v_user_id is not null then
+--     insert into public.user_profiles (id, full_name, role)
+--     values (v_user_id, 'E2E Test User', 'store_associate')
+--     on conflict (id) do update set role = excluded.role;
+--   end if;
+-- end $$;
+
+select 1; -- no-op so the migration is non-empty
