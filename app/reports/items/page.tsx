@@ -24,30 +24,35 @@ async function getItemData(days: number, categoryFilter: string | null): Promise
   const startStr = start.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const endStr = end.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  // Aggregate in SQL to avoid the 1000-row Supabase REST cap
+  // Read from the Thrive warehouse. thrive_sales_history is daily-grain
+  // and already has item_name; we join thrive_product_catalog for the
+  // department label that drives the category filter. Aggregate in SQL
+  // via run_report_query to bypass the 1000-row Supabase REST cap.
   const categoryClause = categoryFilter
-    ? `AND category_name = '${categoryFilter.replace(/'/g, "''")}'`
+    ? `AND COALESCE(p.department, 'Uncategorized') = '${categoryFilter.replace(/'/g, "''")}'`
     : '';
 
   const sql = `
     SELECT
-      COALESCE(item_name, 'Unknown') AS item_name,
-      MAX(category_name) AS category_name,
-      SUM(net_price_cents)::bigint AS total_cents,
-      SUM(quantity) AS total_qty
-    FROM sales_line_items
-    WHERE sale_date >= '${startStr}' AND sale_date <= '${endStr}'
+      COALESCE(s.item_name, 'Unknown') AS item_name,
+      MAX(COALESCE(p.department, 'Uncategorized')) AS category_name,
+      SUM(s.revenue_cents)::bigint AS total_cents,
+      SUM(s.units)::numeric AS total_qty
+    FROM thrive_sales_history s
+    LEFT JOIN thrive_product_catalog p ON p.thrive_variant_id = s.variant_id
+    WHERE s.sale_date >= '${startStr}' AND s.sale_date <= '${endStr}'
     ${categoryClause}
-    GROUP BY COALESCE(item_name, 'Unknown')
+    GROUP BY COALESCE(s.item_name, 'Unknown')
     ORDER BY total_cents DESC
     LIMIT 500
   `;
 
   const catSql = `
-    SELECT DISTINCT category_name
-    FROM sales_line_items
-    WHERE sale_date >= '${startStr}' AND sale_date <= '${endStr}'
-      AND category_name IS NOT NULL
+    SELECT DISTINCT COALESCE(p.department, 'Uncategorized') AS category_name
+    FROM thrive_sales_history s
+    LEFT JOIN thrive_product_catalog p ON p.thrive_variant_id = s.variant_id
+    WHERE s.sale_date >= '${startStr}' AND s.sale_date <= '${endStr}'
+      AND p.department IS NOT NULL
     ORDER BY category_name
   `;
 
