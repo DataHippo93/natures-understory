@@ -5,8 +5,15 @@
 // Default in @azure/microsoft-playwright-testing is ENTRA_ID, which is
 // why we explicitly pass `serviceAuthType: ServiceAuth.ACCESS_TOKEN`.
 //
+// Note: the MPT reporter is intentionally NOT registered. The current
+// portal-issued token uses the `pwid` claim instead of `aid`, which
+// breaks the reporter's getRegionFromAccountID helper. The workflow
+// patches validateMptPAT to accept pwid; we'd need a parallel patch
+// for the reporter to use it. For first-run we use the local html
+// reporter only — traces still get uploaded as a workflow artifact.
+//
 // Required env vars (set in GitHub Environment "Production"):
-//   PLAYWRIGHT_SERVICE_URL                 wss://<region>.api.playwright.microsoft.com/playwrightworkspaces/<ws-id>/browsers
+//   PLAYWRIGHT_SERVICE_URL                 wss://<region>.api.playwright.microsoft.com/accounts/<ws-id>/browsers
 //   PLAYWRIGHT_SERVICE_ACCESS_TOKEN        from Playwright Testing portal
 //   PLAYWRIGHT_SERVICE_RUN_ID              GH run id for grouping traces
 //   PLAYWRIGHT_TEST_BASE_URL               Vercel URL under test
@@ -41,7 +48,7 @@ export default defineConfig(
     webServer: undefined,
     reporter: [
       ['list'],
-      ['@azure/microsoft-playwright-testing/reporter'],
+      ['html', { open: 'never', outputFolder: 'playwright-report' }],
     ],
   }
 );
