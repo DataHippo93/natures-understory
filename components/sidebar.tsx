@@ -53,6 +53,15 @@ const sections = [
           </svg>
         ),
       },
+      {
+        href: '/asset-life',
+        label: 'Asset Life',
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+            <path fillRule="evenodd" d="M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM6 9.5a.5.5 0 0 1 .5-.5h3v-3a.5.5 0 0 1 1 0v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1-.5-.5Z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
     ],
   },
 ];
