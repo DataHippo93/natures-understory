@@ -75,10 +75,14 @@ export function localDateStr(epochMs: number, tz = LOCAL_TZ): string {
 
 /** Hour 0-23 in local timezone */
 export function localHour(epochMs: number, tz = LOCAL_TZ): number {
-  return parseInt(
+  // Node's Intl returns "24" for midnight in en-US with hour12:false (an
+  // ICU quirk; older runtimes returned "00"). Normalize 24 -> 0 so callers
+  // can rely on a 0-23 range.
+  const h = parseInt(
     new Date(epochMs).toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: tz }),
     10
   );
+  return h === 24 ? 0 : h;
 }
 
 /** Day of week 0=Sun..6=Sat in local timezone */
