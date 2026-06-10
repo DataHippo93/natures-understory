@@ -241,7 +241,6 @@ function tzOffsetString(tz: string): string {
   return isDST ? '-04:00' : '-05:00';
 }
 
-
 export async function fetchOrdersByModifiedTime(sinceMs: number, untilMs: number): Promise<CloverOrder[]> {
   const { mid, token } = getCreds();
   const orders: CloverOrder[] = [];
@@ -249,17 +248,17 @@ export async function fetchOrdersByModifiedTime(sinceMs: number, untilMs: number
   const limit = 100;
   while (true) {
     const params = new URLSearchParams();
-    params.append('filter', );
-    params.append('filter', );
+    params.append('filter', `modifiedTime>=${sinceMs}`);
+    params.append('filter', `modifiedTime<${untilMs}`);
     params.append('expand', 'lineItems,lineItems.item,lineItems.discounts');
     params.append('limit', String(limit));
     params.append('offset', String(offset));
     params.append('orderBy', 'modifiedTime ASC');
-    const res = await fetchWithRetry(, {
-      headers: { Authorization:  },
+    const res = await fetchWithRetry(`${CLOVER_BASE}/${mid}/orders?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
-    if (!res.ok) throw new Error();
+    if (!res.ok) throw new Error(`Clover orders ${res.status}: ${await res.text()}`);
     const data = await res.json();
     const elements = data.elements ?? [];
     orders.push(...elements);
@@ -268,3 +267,4 @@ export async function fetchOrdersByModifiedTime(sinceMs: number, untilMs: number
   }
   return orders;
 }
+
