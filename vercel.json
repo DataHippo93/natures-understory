@@ -13,10 +13,6 @@
   },
   "crons": [
     {
-      "path": "/api/cron/daily-sync",
-      "schedule": "0 7 * * *"
-    },
-    {
       "path": "/api/cron/sync-clover-discounts",
       "schedule": "0,15,30,45 * * * *"
     }
