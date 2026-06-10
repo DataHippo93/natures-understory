@@ -137,12 +137,14 @@ export interface CloverLineItem {
     id: string;
     categories?: { elements: Array<{ id: string; name: string }> };
   };
+  discounts?: { elements: Array<{ id?: string; name?: string; amount?: number; percentage?: number; discount?: { id?: string } }> };
   createdTime: number; // ms epoch
 }
 
 export interface CloverOrder {
   id: string;
   createdTime: number;
+  modifiedTime?: number;
   lineItems?: { elements: CloverLineItem[] };
 }
 
@@ -237,4 +239,32 @@ function tzOffsetString(tz: string): string {
   // Determine if currently DST
   const isDST = -now.getTimezoneOffset() !== stdOffset;
   return isDST ? '-04:00' : '-05:00';
+}
+
+
+export async function fetchOrdersByModifiedTime(sinceMs: number, untilMs: number): Promise<CloverOrder[]> {
+  const { mid, token } = getCreds();
+  const orders: CloverOrder[] = [];
+  let offset = 0;
+  const limit = 100;
+  while (true) {
+    const params = new URLSearchParams();
+    params.append('filter', );
+    params.append('filter', );
+    params.append('expand', 'lineItems,lineItems.item,lineItems.discounts');
+    params.append('limit', String(limit));
+    params.append('offset', String(offset));
+    params.append('orderBy', 'modifiedTime ASC');
+    const res = await fetchWithRetry(, {
+      headers: { Authorization:  },
+      cache: 'no-store',
+    });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    const elements = data.elements ?? [];
+    orders.push(...elements);
+    if (elements.length < limit) break;
+    offset += limit;
+  }
+  return orders;
 }
