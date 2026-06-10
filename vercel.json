@@ -1,24 +1,20 @@
 {
-  "framework": "nextjs",
-  "buildCommand": "next build",
-  "devCommand": "next dev",
-  "installCommand": "npm install",
-  "functions": {
-    "app/api/**/*.ts": {
-      "maxDuration": 60
-    },
-    "app/api/cron/**/*.ts": {
-      "maxDuration": 300
-    }
-  },
-  "crons": [
-    {
-      "path": "/api/cron/daily-sync",
-      "schedule": "0 7 * * *"
-    },
-    {
-      "path": "/api/cron/sync-clover-discounts",
-      "schedule": "0,15,30,45 * * * *"
-    }
-  ]
+    "framework":  "nextjs",
+    "buildCommand":  "next build",
+    "devCommand":  "next dev",
+    "installCommand":  "npm install",
+    "functions":  {
+                      "app/api/**/*.ts":  {
+                                              "maxDuration":  60
+                                          },
+                      "app/api/cron/**/*.ts":  {
+                                                   "maxDuration":  300
+                                               }
+                  },
+    "crons":  [
+                  {
+                      "path":  "/api/cron/daily-sync",
+                      "schedule":  "0 7 * * *"
+                  }
+              ]
 }
