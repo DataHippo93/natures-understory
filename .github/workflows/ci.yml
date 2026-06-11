@@ -26,6 +26,9 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: test
+    # Secrets live in the "Production" environment (the default env has none —
+    # this is why e2e ran with blank credentials and failed on every push).
+    environment: Production
     env:
       NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -34,9 +37,11 @@ jobs:
       NATURES_STOREHOUSE_TOKEN: ${{ secrets.NATURES_STOREHOUSE_TOKEN }}
       HOMEBASE_API_KEY: ${{ secrets.HOMEBASE_API_KEY }}
       HOMEBASE_LOCATION_ID: ${{ secrets.HOMEBASE_LOCATION_ID }}
+      HA_URL: ${{ secrets.HA_URL }}
+      HOME_ASSISTANT_TOKEN: ${{ secrets.HOME_ASSISTANT_TOKEN }}
       NEXT_PUBLIC_SITE_URL: http://localhost:3000
-      TEST_EMAIL: ${{ secrets.TEST_EMAIL }}
-      TEST_PASSWORD: ${{ secrets.TEST_PASSWORD }}
+      TEST_EMAIL: ${{ secrets.E2E_USER_EMAIL }}
+      TEST_PASSWORD: ${{ secrets.E2E_USER_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
