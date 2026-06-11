@@ -1,0 +1,208 @@
+// Thrive (Shopventory) warehouse data layer.
+//
+// Source of truth for SALES REPORTING: public.thrive_sales_history —
+// daily per-variant aggregates synced nightly (5am UTC) by the
+// thrive-pipeline repo (separate Vercel project). Catalog enrichment
+// comes from public.thrive_product_catalog (department, brand, vendor).
+//
+// This module deliberately contains NO Clover dependencies. Clover's
+// live Payments API is still used elsewhere for *today's* intraday
+// numbers (Thrive lands a full day at a time).
+import { createAdminClient } from './supabase/admin';
+
+const LOCAL_TZ = 'America/New_York';
+
+export interface DepartmentSales {
+  department: string;
+  revenue: number;       // dollars
+  unitsSold: number;
+  profit: number;        // dollars
+  marginPct: number;     // weighted avg margin
+  pct: number;           // % of total revenue
+}
+
+export interface ItemSales {
+  itemName: string;
+  variantName: string | null;
+  sku: string | null;
+  department: string;
+  brand: string | null;
+  unitsSold: number;
+  revenue: number;
+  profit: number;
+  marginPct: number | null;
+}
+
+export interface DailyRevenue {
+  date: string; // YYYY-MM-DD
+  revenue: number;
+  units: number;
+}
+
+function todayStr(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: LOCAL_TZ });
+}
+
+function offsetDateStr(baseDate: string, offsetDays: number): string {
+  const d = new Date(baseDate + 'T12:00:00');
+  d.setDate(d.getDate() + offsetDays);
+  return d.toLocaleDateString('en-CA');
+}
+
+/** Validates YYYY-MM-DD before SQL interpolation. */
+function assertDate(s: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error(`Invalid date: ${s}`);
+  return s;
+}
+
+async function reportQuery<T>(sql: string): Promise<T[]> {
+  const admin = createAdminClient();
+  if (!admin) throw new Error('Supabase admin client not configured');
+  const { data, error } = await admin.rpc('run_report_query', { query: sql });
+  if (error) throw new Error(`Thrive report query failed: ${error.message}`);
+  return (data ?? []) as T[];
+}
+
+/** Most recent sale_date in the warehouse — drives the "data through" badge. */
+export async function getLatestSaleDate(): Promise<string | null> {
+  const rows = await reportQuery<{ d: string | null }>(
+    `SELECT MAX(sale_date)::text AS d FROM thrive_sales_history`
+  );
+  return rows[0]?.d ?? null;
+}
+
+/** Revenue by department over the trailing N days (ending at latest synced day). */
+export async function getDepartmentSales(days: number): Promise<DepartmentSales[]> {
+  const end = assertDate(todayStr());
+  const start = assertDate(offsetDateStr(end, -Math.max(1, Math.min(365, days))));
+
+  const rows = await reportQuery<{
+    department: string;
+    revenue_cents: number;
+    units: number;
+    profit_cents: number;
+  }>(`
+    SELECT
+      COALESCE(c.department, 'Uncategorized') AS department,
+      COALESCE(SUM(s.revenue_cents), 0)::bigint AS revenue_cents,
+      COALESCE(SUM(s.units), 0)::numeric AS units,
+      COALESCE(SUM(s.profit_cents), 0)::bigint AS profit_cents
+    FROM thrive_sales_history s
+    LEFT JOIN thrive_product_catalog c ON c.thrive_variant_id = s.variant_id
+    WHERE s.sale_date >= '${start}' AND s.sale_date <= '${end}'
+    GROUP BY COALESCE(c.department, 'Uncategorized')
+    ORDER BY revenue_cents DESC
+  `);
+
+  const total = rows.reduce((s, r) => s + (r.revenue_cents ?? 0), 0);
+  return rows.map((r) => ({
+    department: r.department,
+    revenue: (r.revenue_cents ?? 0) / 100,
+    unitsSold: Math.round(Number(r.units ?? 0)),
+    profit: (r.profit_cents ?? 0) / 100,
+    marginPct:
+      r.revenue_cents > 0 ? Math.round(((r.profit_cents ?? 0) / r.revenue_cents) * 1000) / 10 : 0,
+    pct: total > 0 ? ((r.revenue_cents ?? 0) / total) * 100 : 0,
+  }));
+}
+
+/** Top items by revenue over the trailing N days, optionally within one department. */
+export async function getItemSales(
+  days: number,
+  limit = 100,
+  department: string | null = null
+): Promise<ItemSales[]> {
+  const end = assertDate(todayStr());
+  const start = assertDate(offsetDateStr(end, -Math.max(1, Math.min(365, days))));
+  const lim = Math.max(1, Math.min(500, Math.floor(limit)));
+  const deptClause = department
+    ? `AND COALESCE(c.department, 'Uncategorized') = '${department.replace(/'/g, "''")}'`
+    : '';
+
+  const rows = await reportQuery<{
+    item_name: string;
+    variant_name: string | null;
+    sku: string | null;
+    department: string;
+    brand: string | null;
+    units: number;
+    revenue_cents: number;
+    profit_cents: number;
+  }>(`
+    SELECT
+      s.item_name,
+      NULLIF(s.variant_name, '') AS variant_name,
+      NULLIF(s.sku, '') AS sku,
+      COALESCE(c.department, 'Uncategorized') AS department,
+      c.brand,
+      COALESCE(SUM(s.units), 0)::numeric AS units,
+      COALESCE(SUM(s.revenue_cents), 0)::bigint AS revenue_cents,
+      COALESCE(SUM(s.profit_cents), 0)::bigint AS profit_cents
+    FROM thrive_sales_history s
+    LEFT JOIN thrive_product_catalog c ON c.thrive_variant_id = s.variant_id
+    WHERE s.sale_date >= '${start}' AND s.sale_date <= '${end}'
+    ${deptClause}
+    GROUP BY s.item_name, NULLIF(s.variant_name, ''), NULLIF(s.sku, ''),
+             COALESCE(c.department, 'Uncategorized'), c.brand
+    ORDER BY revenue_cents DESC
+    LIMIT ${lim}
+  `);
+
+  return rows.map((r) => ({
+    itemName: r.item_name,
+    variantName: r.variant_name,
+    sku: r.sku,
+    department: r.department,
+    brand: r.brand,
+    unitsSold: Math.round(Number(r.units ?? 0) * 10) / 10,
+    revenue: (r.revenue_cents ?? 0) / 100,
+    profit: (r.profit_cents ?? 0) / 100,
+    marginPct:
+      r.revenue_cents > 0 ? Math.round(((r.profit_cents ?? 0) / r.revenue_cents) * 1000) / 10 : null,
+  }));
+}
+
+/**
+ * Daily net revenue between two dates (inclusive), from the Thrive warehouse.
+ * Used by the labor-ratio page (daily sales denominators) and DOW projections.
+ */
+export async function getDailyRevenue(startDate: string, endDate: string): Promise<DailyRevenue[]> {
+  const start = assertDate(startDate);
+  const end = assertDate(endDate);
+
+  const rows = await reportQuery<{ sale_date: string; revenue_cents: number; units: number }>(`
+    SELECT sale_date::text AS sale_date,
+           COALESCE(SUM(revenue_cents), 0)::bigint AS revenue_cents,
+           COALESCE(SUM(units), 0)::numeric AS units
+    FROM thrive_sales_history
+    WHERE sale_date >= '${start}' AND sale_date <= '${end}'
+    GROUP BY sale_date
+    ORDER BY sale_date
+  `);
+
+  return rows.map((r) => ({
+    date: r.sale_date,
+    revenue: (r.revenue_cents ?? 0) / 100,
+    units: Math.round(Number(r.units ?? 0)),
+  }));
+}
+
+/** Average daily revenue by day-of-week (0=Sun..6=Sat) over trailing N days. */
+export async function getDowAverageRevenue(days = 90): Promise<Record<number, number>> {
+  const end = todayStr();
+  const start = offsetDateStr(end, -Math.max(14, Math.min(365, days)));
+  const daily = await getDailyRevenue(start, end);
+
+  const byDow: Record<number, number[]> = {};
+  for (const d of daily) {
+    if (d.revenue <= 0) continue; // closed days don't drag averages down
+    const dow = new Date(d.date + 'T12:00:00').getDay();
+    (byDow[dow] ??= []).push(d.revenue);
+  }
+
+  const avg: Record<number, number> = {};
+  for (const [dow, vals] of Object.entries(byDow)) {
+    avg[Number(dow)] = vals.reduce((s, v) => s + v, 0) / vals.length;
+  }
+  return avg;
+}
