@@ -1,10 +1,10 @@
 import { createClient } from '@/lib/supabase/server';
-import { getCleanupReport, type CleanupItem, type CleanupReport } from '@/lib/thrive';
+import { getCleanupReport, type CleanupItem, type CleanupSection } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 
 export const dynamic = 'force-dynamic';
 
-function IssueTable({ items, showCategories }: { items: CleanupItem[]; showCategories?: boolean }) {
+function IssueTable({ items, detailLabel }: { items: CleanupItem[]; detailLabel: string | null }) {
   if (items.length === 0) {
     return (
       <p className="px-5 py-6 text-sm" style={{ color: '#7aaa62' }}>
@@ -12,13 +12,17 @@ function IssueTable({ items, showCategories }: { items: CleanupItem[]; showCateg
       </p>
     );
   }
+  const showCategories = items.some((it) => it.categories);
+  const showDetail = items.some((it) => it.detail);
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" style={{ maxHeight: '480px', overflowY: 'auto' }}>
       <table className="w-full text-xs">
         <thead>
           <tr style={{ borderBottom: '1px solid var(--forest-mid)' }}>
-            {['#', 'Item', 'SKU', 'Barcode', ...(showCategories ? ['Categories'] : [])].map((h) => (
-              <th key={h} className="px-4 py-3 text-left font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)', fontSize: '10px' }}>
+            {['#', 'Item', 'SKU', 'Barcode',
+              ...(showDetail ? [detailLabel ?? 'Detail'] : []),
+              ...(showCategories ? ['Categories / Vendor'] : [])].map((h) => (
+              <th key={h} className="px-4 py-3 text-left font-bold uppercase tracking-widest sticky top-0" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)', fontSize: '10px', background: 'var(--forest)' }}>
                 {h}
               </th>
             ))}
@@ -31,8 +35,11 @@ function IssueTable({ items, showCategories }: { items: CleanupItem[]; showCateg
               <td className="px-4 py-2.5 font-medium" style={{ color: 'var(--cream)' }}>{it.name}</td>
               <td className="px-4 py-2.5 font-mono" style={{ color: 'var(--sage)' }}>{it.sku ?? '—'}</td>
               <td className="px-4 py-2.5 font-mono" style={{ color: 'var(--sage)' }}>{it.barcode ?? '—'}</td>
+              {showDetail && (
+                <td className="px-4 py-2.5" style={{ color: '#c4923a' }}>{it.detail ?? '—'}</td>
+              )}
               {showCategories && (
-                <td className="px-4 py-2.5" style={{ color: '#c4923a' }}>{it.categories ?? '—'}</td>
+                <td className="px-4 py-2.5" style={{ color: 'var(--sage)' }}>{it.categories ?? '—'}</td>
               )}
             </tr>
           ))}
@@ -46,42 +53,17 @@ export default async function InventoryCleanupPage() {
   const supabase = await createClient();
   const user = supabase ? (await supabase.auth.getUser()).data.user : null;
 
-  let report: CleanupReport = { noVendor: [], conflictingCategories: [], noBarcode: [] };
+  let sections: CleanupSection[] = [];
   let error: string | null = null;
   if (user) {
     try {
-      report = await getCleanupReport();
+      sections = await getCleanupReport();
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
   }
 
-  const sections = [
-    {
-      key: 'vendors',
-      title: 'No Vendor Configured',
-      description:
-        'Active items with no vendor in Thrive. These can’t be reordered through the PO flow and show a blank Brand on the Loss Tally sheet. Fix: open the item in Thrive → Vendors → add the supplier.',
-      items: report.noVendor,
-      showCategories: false,
-    },
-    {
-      key: 'conflicts',
-      title: 'Conflicting Categories',
-      description:
-        'Items in Produce AND Grocery/Supplements at the same time — these category pairs shouldn’t coexist and make department reporting ambiguous. (Grocery + Locally Made is fine and not flagged.) Fix: remove the wrong category in Thrive.',
-      items: report.conflictingCategories,
-      showCategories: true,
-    },
-    {
-      key: 'barcodes',
-      title: 'No Barcode',
-      description:
-        'Active items with no barcode. These can’t be scanned at the register and can’t be matched by the Clover loss-tally sync.',
-      items: report.noBarcode,
-      showCategories: false,
-    },
-  ];
+  const totalIssues = sections.reduce((s, x) => s + x.items.length, 0);
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -90,7 +72,7 @@ export default async function InventoryCleanupPage() {
           Inventory Cleanup
         </h1>
         <p className="mt-0.5 text-sm" style={{ color: 'var(--sage)' }}>
-          Data problems in the Thrive catalog, ready to work through as lists. Fix items at the source in Thrive — this report refreshes from the nightly catalog sync.
+          Data problems in the Thrive catalog, ready to work through as lists ({totalIssues} total). Fix items at the source in Thrive — this report refreshes from the nightly catalog sync.
         </p>
       </div>
 
@@ -102,16 +84,15 @@ export default async function InventoryCleanupPage() {
       )}
 
       {/* Summary cards */}
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {sections.map((s) => (
-          <a key={s.key} href={`#${s.key}`} className="rounded-lg p-4 block" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
+          <a key={s.key} href={`#${s.key}`} className="rounded-lg p-3 block" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
             <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>
               {s.title}
             </p>
-            <p className="mt-1 text-2xl font-bold" style={{ color: s.items.length === 0 ? '#7aaa62' : '#c4923a', fontFamily: 'var(--font-josefin)' }}>
+            <p className="mt-1 text-xl font-bold" style={{ color: s.items.length === 0 ? '#7aaa62' : '#c4923a', fontFamily: 'var(--font-josefin)' }}>
               {s.items.length}
             </p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{s.items.length === 0 ? 'clean' : 'items to fix'}</p>
           </a>
         ))}
       </div>
@@ -123,7 +104,7 @@ export default async function InventoryCleanupPage() {
             <CardDescription>{s.description}</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <IssueTable items={s.items} showCategories={s.showCategories} />
+            <IssueTable items={s.items} detailLabel={s.detailLabel} />
           </CardContent>
         </Card>
       ))}

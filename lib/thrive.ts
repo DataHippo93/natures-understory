@@ -106,52 +106,149 @@ export interface CleanupItem {
   sku: string | null;
   barcode: string | null;
   categories: string | null;
+  detail: string | null;
 }
 
-export interface CleanupReport {
-  noVendor: CleanupItem[];
-  conflictingCategories: CleanupItem[];
-  noBarcode: CleanupItem[];
+export interface CleanupSection {
+  key: string;
+  title: string;
+  description: string;
+  detailLabel: string | null;
+  items: CleanupItem[];
 }
 
+// Thrive sends jsonb null (a scalar) for missing arrays — COALESCE doesn't
+// catch that and jsonb_array_length() errors on it. Always type-guard.
+const CATS = `CASE WHEN jsonb_typeof(raw->'item'->'categories') = 'array'
+                   THEN raw->'item'->'categories' ELSE '[]'::jsonb END`;
+const VENDORS = `CASE WHEN jsonb_typeof(raw->'variant'->'vendors_list') = 'array'
+                      THEN raw->'variant'->'vendors_list' ELSE '[]'::jsonb END`;
 const CLEANUP_COLS = `
   name,
   NULLIF(sku, '') AS sku,
   NULLIF(barcode, '') AS barcode,
-  (SELECT string_agg(c->>'name', ' | ')
-     FROM jsonb_array_elements(COALESCE(raw->'item'->'categories', '[]'::jsonb)) c) AS categories`;
+  (SELECT string_agg(c->>'name', ' | ') FROM jsonb_array_elements(${CATS}) c) AS categories`;
 
 /** List-manage data problems in the Thrive catalog so they can be fixed at
- *  the source. Active items only. */
-export async function getCleanupReport(): Promise<CleanupReport> {
-  const [noVendor, conflictingCategories, noBarcode] = await Promise.all([
-    reportQuery<CleanupItem>(`
-      SELECT ${CLEANUP_COLS}
-      FROM thrive_product_catalog
-      WHERE active
-        AND jsonb_array_length(COALESCE(raw->'variant'->'vendors_list', '[]'::jsonb)) = 0
-      ORDER BY name
-      LIMIT 500`),
-    reportQuery<CleanupItem>(`
-      WITH cats AS (
-        SELECT name, sku, barcode, raw,
-               ARRAY(SELECT jsonb_array_elements(COALESCE(raw->'item'->'categories','[]'::jsonb))->>'name') AS cat_names
-        FROM thrive_product_catalog WHERE active
-      )
-      SELECT ${CLEANUP_COLS}
-      FROM cats
-      WHERE 'Produce [EBT]' = ANY(cat_names)
-        AND ('Supplements' = ANY(cat_names) OR 'Grocery [EBT]' = ANY(cat_names))
-      ORDER BY name
-      LIMIT 500`),
-    reportQuery<CleanupItem>(`
-      SELECT ${CLEANUP_COLS}
-      FROM thrive_product_catalog
-      WHERE active AND (barcode IS NULL OR barcode = '')
-      ORDER BY name
-      LIMIT 500`),
+ *  the source. Active items only; each list capped at 500 rows. */
+export async function getCleanupReport(): Promise<CleanupSection[]> {
+  const q = (sql: string) => reportQuery<CleanupItem>(sql);
+  const [noVendor, conflicting, noBarcode, lowMargin, taxAmbiguous, likelyEbt,
+         noSales, naming, stockTake] = await Promise.all([
+    q(`SELECT ${CLEANUP_COLS}, department AS detail
+       FROM thrive_product_catalog
+       WHERE active AND jsonb_array_length(${VENDORS}) = 0
+       ORDER BY name LIMIT 500`),
+    q(`WITH cats AS (
+         SELECT name, sku, barcode, raw,
+                ARRAY(SELECT jsonb_array_elements(${CATS})->>'name') AS cat_names
+         FROM thrive_product_catalog WHERE active)
+       SELECT ${CLEANUP_COLS}, NULL AS detail
+       FROM cats
+       WHERE 'Produce [EBT]' = ANY(cat_names)
+         AND ('Supplements' = ANY(cat_names) OR 'Grocery [EBT]' = ANY(cat_names))
+       ORDER BY name LIMIT 500`),
+    q(`SELECT ${CLEANUP_COLS}, department AS detail
+       FROM thrive_product_catalog
+       WHERE active AND (barcode IS NULL OR barcode = '')
+       ORDER BY name LIMIT 500`),
+    q(`SELECT ${CLEANUP_COLS},
+              round(100.0 * (price_cents - default_cost_cents) / price_cents, 1) || '% margin · $'
+                || round(price_cents / 100.0, 2) || ' price / $'
+                || round(default_cost_cents / 100.0, 2) || ' cost' AS detail
+       FROM thrive_product_catalog
+       WHERE active AND price_cents > 0 AND default_cost_cents > 0
+         AND (price_cents - default_cost_cents)::float / price_cents < 0.15
+       ORDER BY (price_cents - default_cost_cents)::float / price_cents ASC
+       LIMIT 500`),
+    q(`WITH cats AS (
+         SELECT name, sku, barcode, raw,
+                ARRAY(SELECT jsonb_array_elements(${CATS})->>'name') AS cat_names
+         FROM thrive_product_catalog WHERE active)
+       SELECT ${CLEANUP_COLS}, NULL AS detail
+       FROM cats
+       WHERE EXISTS (SELECT 1 FROM unnest(cat_names) n WHERE n LIKE '%[TAX]%')
+         AND EXISTS (SELECT 1 FROM unnest(cat_names) n WHERE n LIKE '%[EBT]%')
+       ORDER BY name LIMIT 500`),
+    q(`SELECT ${CLEANUP_COLS}, department AS detail
+       FROM thrive_product_catalog
+       WHERE active AND department IN ('Grocery', 'Produce', 'Bulk')
+         AND NOT EXISTS (
+           SELECT 1 FROM jsonb_array_elements(${CATS}) c
+           WHERE c->>'name' LIKE '%[EBT]%')
+       ORDER BY name LIMIT 500`),
+    q(`SELECT ${CLEANUP_COLS},
+              COALESCE((SELECT max(s.sale_date)::text FROM thrive_sales_history s
+                        WHERE s.variant_id = thrive_product_catalog.thrive_variant_id), 'never') AS detail
+       FROM thrive_product_catalog
+       WHERE active
+         AND COALESCE(substring(raw->'variant'->>'created' FROM 1 FOR 10)::date, '2000-01-01') < current_date - 60
+         AND NOT EXISTS (
+           SELECT 1 FROM thrive_sales_history s
+           WHERE s.variant_id = thrive_product_catalog.thrive_variant_id
+             AND s.sale_date >= current_date - 180)
+       ORDER BY name LIMIT 500`),
+    q(`SELECT ${CLEANUP_COLS},
+              CASE
+                WHEN name <> btrim(name) THEN 'leading/trailing space'
+                WHEN position('  ' IN name) > 0 THEN 'double space'
+                WHEN length(name) > 6 AND upper(name) = name THEN 'ALL CAPS'
+              END AS detail
+       FROM thrive_product_catalog
+       WHERE active AND (
+         name <> btrim(name) OR position('  ' IN name) > 0
+         OR (length(name) > 6 AND upper(name) = name))
+       ORDER BY name LIMIT 500`),
+    q(`WITH sold AS (
+         SELECT c.thrive_item_id, sum(s.units) AS units90
+         FROM thrive_sales_history s
+         JOIN thrive_product_catalog c ON c.thrive_variant_id = s.variant_id
+         WHERE s.sale_date >= current_date - 90
+         GROUP BY c.thrive_item_id)
+       SELECT il.item_name AS name, NULL AS sku, NULL AS barcode,
+              max(c.department) || COALESCE(' · ' || max(v.name), '') AS categories,
+              'on hand ' || il.qty_on_hand || COALESCE(' ' || il.unit, '')
+                || ' · sold (90d) ' || COALESCE(round(sold.units90), 0)
+                || CASE WHEN il.qty_on_hand < 0 THEN ' · NEGATIVE on-hand'
+                        WHEN COALESCE(sold.units90, 0) = 0 THEN ' · no sales 90d'
+                        ELSE ' · on-hand far above sales' END AS detail
+       FROM thrive_inventory_latest il
+       LEFT JOIN sold ON sold.thrive_item_id = il.thrive_item_id
+       LEFT JOIN thrive_product_catalog c ON c.thrive_item_id = il.thrive_item_id
+       LEFT JOIN thrive_vendors v ON v.thrive_vendor_id = c.primary_vendor_id
+       WHERE il.qty_on_hand < 0
+          OR (il.qty_on_hand >= 20 AND COALESCE(sold.units90, 0) = 0)
+          OR (il.qty_on_hand >= 20 AND il.qty_on_hand > 4 * COALESCE(sold.units90, 0))
+       GROUP BY il.item_name, il.qty_on_hand, il.unit, sold.units90
+       ORDER BY il.qty_on_hand ASC LIMIT 500`),
   ]);
-  return { noVendor, conflictingCategories, noBarcode };
+
+  return [
+    { key: 'vendors', title: 'No Vendor Configured', detailLabel: 'Department',
+      description: 'Active items with no vendor in Thrive. These can’t flow through PO ordering and show a blank Brand on the Loss Tally sheet. Fix: item → Vendors in Thrive.',
+      items: noVendor },
+    { key: 'conflicts', title: 'Conflicting Categories', detailLabel: null,
+      description: 'In Produce AND Grocery/Supplements at once — these pairs shouldn’t coexist. (Grocery + Locally Made is fine and not flagged.)',
+      items: conflicting },
+    { key: 'tax', title: 'Tax Status Ambiguous', detailLabel: null,
+      description: 'In both a [TAX] and an [EBT] category — the register can only apply one treatment, so one of these categories is wrong.',
+      items: taxAmbiguous },
+    { key: 'ebt', title: 'Likely EBT, Not in an EBT Category', detailLabel: 'Department',
+      description: 'Grocery/Produce/Bulk items with no [EBT] category. If they’re EBT-eligible foods, customers can’t use SNAP on them until categorized.',
+      items: likelyEbt },
+    { key: 'margin', title: 'Selling at Very Low Margin', detailLabel: 'Margin',
+      description: 'Active items with margin under 15% (or selling below cost). Check for stale costs or prices that never got updated.',
+      items: lowMargin },
+    { key: 'deactivate', title: 'Deactivation Candidates (No Sales in 180 Days)', detailLabel: 'Last sale',
+      description: 'Active items (created 60+ days ago) with zero sales in 6 months. Deactivate in Thrive to declutter the catalog, or put them on the Bonus Bin list.',
+      items: noSales },
+    { key: 'naming', title: 'Naming Standards', detailLabel: 'Rule broken',
+      description: 'Placeholder rules for now: leading/trailing spaces, double spaces, ALL-CAPS names. Tell me the real house standards and I’ll encode them per category.',
+      items: naming },
+    { key: 'stocktake', title: 'Stock-Take Candidates (Inventory Looks Off)', detailLabel: 'Why flagged',
+      description: 'Negative on-hand, or 20+ on hand with no/low sales in 90 days — counts that deserve a physical check. Department · vendor shown for routing the count.',
+      items: stockTake },
+  ];
 }
 
 /** Most recent sale_date in the warehouse — drives the "data through" badge. */
