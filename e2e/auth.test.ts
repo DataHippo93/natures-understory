@@ -51,15 +51,16 @@ test.describe('Navigation (authenticated)', () => {
 
   test('dashboard loads with KPI cards', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator("text=Today's Sales")).toBeVisible({ timeout: 10000 });
-    await expect(page.locator("text=Labor Ratio")).toBeVisible();
-    await expect(page.locator("text=Current Quiet Score")).toBeVisible();
+    // .first(): KPI titles can also appear in side-cards/labels — strict mode
+    await expect(page.locator("text=Today's Sales").first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=Labor Ratio').first()).toBeVisible();
+    await expect(page.locator('text=Current Quiet Score').first()).toBeVisible();
   });
 
   test('shift analysis page loads', async ({ page }) => {
     await page.goto('/shifts');
-    await expect(page.locator("text=Shift Analysis")).toBeVisible({ timeout: 10000 });
-    await expect(page.locator("text=Day of Week Breakdown")).toBeVisible();
+    await expect(page.getByRole('heading', { name: /Shift Analysis/i })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=Day of Week Breakdown').first()).toBeVisible();
   });
 
   test('labor ratio page loads', async ({ page }) => {
@@ -69,25 +70,26 @@ test.describe('Navigation (authenticated)', () => {
 
   test('schedule page loads', async ({ page }) => {
     await page.goto('/schedule');
-    await expect(page.locator("text=Schedule")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: /Schedule/i })).toBeVisible({ timeout: 10000 });
   });
 
   test('lookback filter changes data range', async ({ page }) => {
     await page.goto('/labor?days=30');
-    await expect(page.locator("text=30 days")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('(30 days)', { exact: true })).toBeVisible({ timeout: 10000 });
 
     await page.click('text=7D');
     await expect(page).toHaveURL(/days=7/);
-    await expect(page.locator("text=7 days")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('(7 days)', { exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test('sidebar has expected navigation items', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('text=Dashboard')).toBeVisible();
-    await expect(page.locator('text=Shift Analysis')).toBeVisible();
-    await expect(page.locator('text=Labor Ratio')).toBeVisible();
-    await expect(page.locator('text=Schedule')).toBeVisible();
-    await expect(page.locator('text=Category Sales')).toBeVisible();
+    const nav = page.locator('aside');
+    await expect(nav.getByRole('link', { name: 'Dashboard' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Shift Analysis' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Labor Ratio' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Schedule' })).toBeVisible();
+    await expect(nav.getByRole('link', { name: 'Category Sales' })).toBeVisible();
   });
 
   test('reports category page loads', async ({ page }) => {
