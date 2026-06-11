@@ -99,6 +99,61 @@ async function reportQuery<T>(sql: string): Promise<T[]> {
   return (data ?? []) as T[];
 }
 
+// ─── Inventory cleanup report ────────────────────────────────────────────────
+
+export interface CleanupItem {
+  name: string;
+  sku: string | null;
+  barcode: string | null;
+  categories: string | null;
+}
+
+export interface CleanupReport {
+  noVendor: CleanupItem[];
+  conflictingCategories: CleanupItem[];
+  noBarcode: CleanupItem[];
+}
+
+const CLEANUP_COLS = `
+  name,
+  NULLIF(sku, '') AS sku,
+  NULLIF(barcode, '') AS barcode,
+  (SELECT string_agg(c->>'name', ' | ')
+     FROM jsonb_array_elements(COALESCE(raw->'item'->'categories', '[]'::jsonb)) c) AS categories`;
+
+/** List-manage data problems in the Thrive catalog so they can be fixed at
+ *  the source. Active items only. */
+export async function getCleanupReport(): Promise<CleanupReport> {
+  const [noVendor, conflictingCategories, noBarcode] = await Promise.all([
+    reportQuery<CleanupItem>(`
+      SELECT ${CLEANUP_COLS}
+      FROM thrive_product_catalog
+      WHERE active
+        AND jsonb_array_length(COALESCE(raw->'variant'->'vendors_list', '[]'::jsonb)) = 0
+      ORDER BY name
+      LIMIT 500`),
+    reportQuery<CleanupItem>(`
+      WITH cats AS (
+        SELECT name, sku, barcode, raw,
+               ARRAY(SELECT jsonb_array_elements(COALESCE(raw->'item'->'categories','[]'::jsonb))->>'name') AS cat_names
+        FROM thrive_product_catalog WHERE active
+      )
+      SELECT ${CLEANUP_COLS}
+      FROM cats
+      WHERE 'Produce [EBT]' = ANY(cat_names)
+        AND ('Supplements' = ANY(cat_names) OR 'Grocery [EBT]' = ANY(cat_names))
+      ORDER BY name
+      LIMIT 500`),
+    reportQuery<CleanupItem>(`
+      SELECT ${CLEANUP_COLS}
+      FROM thrive_product_catalog
+      WHERE active AND (barcode IS NULL OR barcode = '')
+      ORDER BY name
+      LIMIT 500`),
+  ]);
+  return { noVendor, conflictingCategories, noBarcode };
+}
+
 /** Most recent sale_date in the warehouse — drives the "data through" badge. */
 export async function getLatestSaleDate(): Promise<string | null> {
   const rows = await reportQuery<{ d: string | null }>(

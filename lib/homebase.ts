@@ -87,10 +87,15 @@ function nyMidnightUTC(dateStr: string): Date {
  *  matches Homebase's local-date filtering exactly. */
 function nyDayRange(startDate: string, endDate: string): { startUTC: string; endUTC: string } {
   const startUTC = nyMidnightUTC(startDate).toISOString();
-  // endUTC is exclusive — midnight NY on (endDate + 1 day)
+  // endUTC is exclusive — midnight NY on (endDate + 1 day).
+  // Date arithmetic only: converting Date.UTC(y,m,d+1) through the NY
+  // timezone lands at 7/8pm the PREVIOUS evening, which collapsed the end
+  // date back onto endDate (single-day ranges became empty, multi-day
+  // ranges silently lost their last day). Use noon UTC so the calendar
+  // rollover is timezone-safe, then take the ISO date directly.
   const [y, m, d] = endDate.split('-').map((s) => parseInt(s, 10));
-  const endPlus1 = new Date(Date.UTC(y, m - 1, d + 1));
-  const endStr = endPlus1.toLocaleDateString('en-CA', { timeZone: NY_TZ });
+  const endPlus1 = new Date(Date.UTC(y, m - 1, d + 1, 12));
+  const endStr = endPlus1.toISOString().slice(0, 10);
   const endUTC = nyMidnightUTC(endStr).toISOString();
   return { startUTC, endUTC };
 }
