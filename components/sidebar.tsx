@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
 interface SidebarProps {
@@ -124,12 +125,66 @@ const comingSoon = [
 
 export function Sidebar({ userEmail }: SidebarProps) {
   const pathname = usePathname();
+  const [open, setOpen] = useState(false);
+
+  // Close the mobile drawer whenever navigation happens
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
 
   return (
-    <aside
-      className="fixed left-0 top-0 z-20 flex h-screen w-56 flex-col"
-      style={{ background: 'var(--forest-darkest)', borderRight: '1px solid var(--forest-mid)' }}
-    >
+    <>
+      {/* Mobile top bar (hidden on desktop) */}
+      <header
+        className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between px-4 lg:hidden"
+        style={{ background: 'var(--forest-darkest)', borderBottom: '1px solid var(--forest-mid)' }}
+      >
+        <div className="flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg" style={{ background: 'var(--gold)' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4 text-[#082a1b]">
+              <path fillRule="evenodd" d="M12.963 2.286a.75.75 0 0 0-1.071-.136 9.742 9.742 0 0 0-3.539 6.176 7.547 7.547 0 0 1-1.705-1.715.75.75 0 0 0-1.152-.082A9 9 0 1 0 15.68 4.534a7.46 7.46 0 0 1-2.717-2.248ZM15.75 14.25a3.75 3.75 0 1 1-7.313-1.172c.628.465 1.35.81 2.133 1a5.99 5.99 0 0 1 1.925-3.546 3.75 3.75 0 0 1 3.255 3.718Z" clipRule="evenodd" />
+            </svg>
+          </div>
+          <span className="text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--gold)', fontFamily: 'var(--font-josefin)' }}>
+            Nature&apos;s Understory
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={open ? 'Close menu' : 'Open menu'}
+          aria-expanded={open}
+          className="flex h-9 w-9 items-center justify-center rounded-md"
+          style={{ color: 'var(--cream)', border: '1px solid var(--forest-mid)' }}
+        >
+          {open ? (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+              <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-5 w-5">
+              <path fillRule="evenodd" d="M2 4.75A.75.75 0 0 1 2.75 4h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 4.75ZM2 10a.75.75 0 0 1 .75-.75h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 10Zm0 5.25a.75.75 0 0 1 .75-.75h14.5a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1-.75-.75Z" clipRule="evenodd" />
+            </svg>
+          )}
+        </button>
+      </header>
+
+      {/* Backdrop for the mobile drawer */}
+      {open && (
+        <div
+          className="fixed inset-0 z-20 bg-black/60 lg:hidden"
+          onClick={() => setOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={cn(
+          'fixed left-0 top-0 z-30 flex h-screen w-56 flex-col transition-transform duration-200 lg:translate-x-0 lg:z-20',
+          open ? 'translate-x-0' : '-translate-x-full'
+        )}
+        style={{ background: 'var(--forest-darkest)', borderRight: '1px solid var(--forest-mid)' }}
+      >
       {/* Logo */}
       <div className="px-5 py-5" style={{ borderBottom: '1px solid var(--forest-mid)' }}>
         <div className="flex items-center gap-2.5">
@@ -320,5 +375,6 @@ export function Sidebar({ userEmail }: SidebarProps) {
         </form>
       </div>
     </aside>
+    </>
   );
 }

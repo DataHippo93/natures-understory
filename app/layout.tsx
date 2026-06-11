@@ -36,16 +36,25 @@ export default async function RootLayout({
   return (
     <html lang="en" className={`${josefinSans.variable} ${montserrat.variable} h-full`}>
       <body className="h-full" style={{ background: 'var(--forest-dark)', color: 'var(--cream)' }}>
-        <Sidebar userEmail={user?.email} />
-        {/* Main content offset by sidebar width */}
-        <div className="ml-56 min-h-screen flex flex-col">
-          <main className="flex-1 p-6 lg:p-8">
-            {children}
-          </main>
-          <footer className="px-6 py-3 text-xs lg:px-8" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--forest-mid)' }}>
-            Nature&apos;s Storehouse · Canton, NY · Internal use only
-          </footer>
-        </div>
+        {user ? (
+          <>
+            <Sidebar userEmail={user.email} />
+            {/* Main content: offset by sidebar on desktop, by the mobile top bar on phones */}
+            <div className="lg:ml-56 min-h-screen flex flex-col pt-14 lg:pt-0">
+              <main className="flex-1 p-4 sm:p-6 lg:p-8">
+                {children}
+              </main>
+              <footer className="px-6 py-3 text-xs lg:px-8" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--forest-mid)' }}>
+                Nature&apos;s Storehouse · Canton, NY · Internal use only
+              </footer>
+            </div>
+          </>
+        ) : (
+          // Signed-out (login page): no app chrome.
+          <div className="min-h-screen flex flex-col">
+            <main className="flex-1">{children}</main>
+          </div>
+        )}
       </body>
     </html>
   );

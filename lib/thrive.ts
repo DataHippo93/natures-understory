@@ -58,7 +58,8 @@ function assertDate(s: string): string {
 async function reportQuery<T>(sql: string): Promise<T[]> {
   const admin = createAdminClient();
   if (!admin) throw new Error('Supabase admin client not configured');
-  const { data, error } = await admin.rpc('run_report_query', { query_sql: sql });
+  // trim: the RPC's SELECT-only guard rejects leading whitespace/newlines
+  const { data, error } = await admin.rpc('run_report_query', { query_sql: sql.trim() });
   if (error) throw new Error(`Thrive report query failed: ${error.message}`);
   return (data ?? []) as T[];
 }
