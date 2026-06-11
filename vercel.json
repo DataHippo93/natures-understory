@@ -1,20 +1,17 @@
 {
-    "framework":  "nextjs",
-    "buildCommand":  "next build",
-    "devCommand":  "next dev",
-    "installCommand":  "npm install",
-    "functions":  {
-                      "app/api/**/*.ts":  {
-                                              "maxDuration":  60
-                                          },
-                      "app/api/cron/**/*.ts":  {
-                                                   "maxDuration":  300
-                                               }
-                  },
-    "crons":  [
-                  {
-                      "path":  "/api/cron/daily-sync",
-                      "schedule":  "0 7 * * *"
-                  }
-              ]
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "devCommand": "next dev",
+  "installCommand": "npm install",
+  "functions": {
+    "app/api/**/*.ts": { "maxDuration": 60 },
+    "app/api/cron/**/*.ts": { "maxDuration": 300 }
+  },
+  "crons": [
+    { "path": "/api/cron/pull-coolers",     "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/pull-pricelists",  "schedule": "50 10 * * 1,4" },
+    { "path": "/api/cron/pull-invoice",     "schedule": "*/20 21-23 * * 1,4" },
+    { "path": "/api/cron/pull-invoice",     "schedule": "*/20 0-3 * * 2,5" },
+    { "path": "/api/cron/compute-features", "schedule": "30 7 * * *" }
+  ]
 }

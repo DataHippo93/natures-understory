@@ -25,8 +25,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const email = 'cmaine@ycconsulting.biz';
-const password = 'Cerises!1';
+const email = process.env.ADMIN_EMAIL;
+const password = process.env.ADMIN_PASSWORD;
+if (!email || !password) {
+  console.error('Set ADMIN_EMAIL and ADMIN_PASSWORD env vars — credentials are never hardcoded.');
+  process.exit(1);
+}
 
 console.log(`Creating user: ${email}`);
 

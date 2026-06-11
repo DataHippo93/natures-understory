@@ -33,3 +33,18 @@ Thumbs.db
 *.swp
 *.swo
 .vercel
+node_modules
+
+# Build artifacts
+.next/
+tsconfig.tsbuildinfo
+test-results/
+playwright-report/
+
+# Agent session scratch files (leading-dot work files)
+.*.bat
+.*.py
+.*.txt
+.*.json
+.*.ts
+.fuse_hidden*

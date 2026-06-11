@@ -1,4 +1,12 @@
-// Data fetching layer — calls real Clover + Homebase APIs, falls back to demo data on error
+// Data fetching layer.
+//
+// Sources of truth:
+//   • Historical sales  → Thrive warehouse (thrive_sales_history, lib/thrive.ts)
+//   • Today's intraday  → Clover Payments API (live; Thrive lands a day at a time)
+//   • Labor             → Homebase API (live; creds in BWS → Vercel env)
+//
+// IMPORTANT: demo data is shown ONLY when DEMO_MODE=true. Real-data errors
+// propagate to the page error boundary — we never silently show fake numbers.
 import type { KPIData, ShiftAnalysisData, LaborRatioData, QuietScore, DayOfWeekBreakdown } from './types';
 import { getDemoKPIData, getDemoShiftAnalysisData, getDemoLaborRatioData } from './demo-data';
 import {
@@ -6,12 +14,11 @@ import {
   netSalesDollars,
   localDateStr,
   localHour,
-  localDayOfWeek,
   todayMidnightMs,
   nDaysAgoMidnightMs,
 } from './clover';
 import { fetchTimecards, fetchShifts } from './homebase';
-import { createAdminClient } from './supabase/admin';
+import { getDailyRevenue, getDowAverageRevenue } from './thrive';
 
 const LOADED_COST_MULTIPLIER = 1.2;
 const LOCAL_TZ = 'America/New_York';
@@ -20,8 +27,9 @@ const STORE_CLOSE_HOUR = 20;
 const DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 export function getIsDemoMode(): boolean {
-  if (process.env.DEMO_MODE === 'true') return true;
-  return !process.env.NATURES_STOREHOUSE_MID || !process.env.NATURES_STOREHOUSE_TOKEN;
+  // Demo data must be EXPLICITLY requested. Missing credentials are a
+  // configuration error and should surface as one — never as fake numbers.
+  return process.env.DEMO_MODE === 'true';
 }
 
 // ─── KPI Data ───────────────────────────────────────────────────────────────
@@ -66,8 +74,8 @@ export async function getKPIData(): Promise<KPIData> {
       quietScoreLabel: currentScore.label,
     };
   } catch (err) {
-    console.error('getKPIData failed, falling back to demo:', err);
-    return getDemoKPIData();
+    console.error('getKPIData failed:', err);
+    throw err instanceof Error ? err : new Error(String(err));
   }
 }
 
@@ -78,42 +86,25 @@ export async function getShiftAnalysisData(lookbackDays = 30): Promise<ShiftAnal
   try {
     const now = Date.now();
     const todayStart = todayMidnightMs(LOCAL_TZ);
-    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: LOCAL_TZ });
-    const lookbackStartStr = offsetDateStr(todayStr, -lookbackDays);
 
-    // Today's live hourly scores — Clover (real-time, small date range)
+    // Hour-of-day analysis needs transaction timestamps, which the Thrive
+    // warehouse doesn't carry (daily grain). Clover's Payments API is the
+    // hourly source — today's scores and the DOW lookback both come from it.
     const todayOpenMs = todayStart + STORE_OPEN_HOUR * 3_600_000;
-    const todayPayments = await fetchPayments(todayOpenMs, now);
+    const lookbackStart = nDaysAgoMidnightMs(Math.min(lookbackDays, 60), LOCAL_TZ);
+
+    const [todayPayments, historicalPayments] = await Promise.all([
+      fetchPayments(todayOpenMs, now),
+      fetchPayments(lookbackStart, todayStart),
+    ]);
+
     const hourlyScores = computeQuietScores(todayPayments);
-
-    // DOW breakdown — Supabase (already synced daily, no Clover rate-limit risk)
-    const admin = createAdminClient();
-    let dayOfWeekBreakdown: DayOfWeekBreakdown[];
-
-    if (admin) {
-      // Aggregate counts in SQL — returns ≤(days×13) rows, no 1000-row cap issue
-      const sql = `
-        SELECT sale_date, sale_hour, COUNT(*)::int AS tx_count
-        FROM sales_line_items
-        WHERE sale_date >= '${lookbackStartStr}' AND sale_date < '${todayStr}'
-          AND sale_hour BETWEEN ${STORE_OPEN_HOUR} AND ${STORE_CLOSE_HOUR}
-        GROUP BY sale_date, sale_hour
-        ORDER BY sale_date, sale_hour
-      `;
-      const { data: rows } = await admin.rpc('run_report_query', { query: sql });
-      const typed = (rows ?? []) as Array<{ sale_date: string; sale_hour: number; tx_count: number }>;
-      dayOfWeekBreakdown = computeDowBreakdownFromRows(typed);
-    } else {
-      // No Supabase — fall back to Clover historical fetch
-      const lookbackStart = nDaysAgoMidnightMs(lookbackDays, LOCAL_TZ);
-      const historicalPayments = await fetchPayments(lookbackStart, todayStart);
-      dayOfWeekBreakdown = computeDowBreakdown(historicalPayments);
-    }
+    const dayOfWeekBreakdown = computeDowBreakdown(historicalPayments);
 
     return { hourlyScores, dayOfWeekBreakdown, lookbackDays };
   } catch (err) {
-    console.error('getShiftAnalysisData failed, falling back to demo:', err);
-    return getDemoShiftAnalysisData(lookbackDays);
+    console.error('getShiftAnalysisData failed:', err);
+    throw err instanceof Error ? err : new Error(String(err));
   }
 }
 
@@ -129,29 +120,20 @@ export async function getLaborRatioData(lookbackDays = 14): Promise<LaborRatioDa
     const projStartDate    = todayStr;
     const projEndDate      = offsetDateStr(todayStr, 14);
 
-    // Cap historical at 90 days for DOW averages — 13 weeks is more than enough pattern data.
-    // Avoids fetching thousands of Clover records for large lookback periods.
-    const DOW_HISTORY_CAP = 90;
-    const historicalDays = Math.max(Math.min(lookbackDays, DOW_HISTORY_CAP), 56);
-    // If lookback ≤ historicalDays, fetch once and reuse; otherwise fetch actuals + history separately.
-    const needsSeparateFetch = lookbackDays > historicalDays;
-
-    const [timecards, shifts, historicalPayments] = await Promise.all([
+    // Daily sales come from the Thrive warehouse (synced nightly), labor
+    // comes from Homebase live. Two cheap queries instead of paging through
+    // thousands of Clover payment records.
+    const [timecards, shifts, dailyRevenue, dowAvgSales] = await Promise.all([
       fetchTimecards(actualsStartDate, actualsEndDate).catch(() => []),
       fetchShifts(projStartDate, projEndDate).catch(() => []),
-      fetchPayments(nDaysAgoMidnightMs(historicalDays, LOCAL_TZ), todayMidnightMs(LOCAL_TZ)),
+      getDailyRevenue(actualsStartDate, actualsEndDate),
+      getDowAverageRevenue(90),
     ]);
 
-    // For actuals, use a separate fetch only when lookback > DOW_HISTORY_CAP
-    const actualsPayments = needsSeparateFetch
-      ? await fetchPayments(nDaysAgoMidnightMs(lookbackDays, LOCAL_TZ), todayMidnightMs(LOCAL_TZ))
-      : historicalPayments;
-
-    // ── Daily sales map from Clover ──────────────────────────────────────────
+    // ── Daily sales map from Thrive ──────────────────────────────────────────
     const dailySalesMap: Record<string, number> = {};
-    for (const p of actualsPayments) {
-      const d = localDateStr(p.createdTime, LOCAL_TZ);
-      dailySalesMap[d] = (dailySalesMap[d] ?? 0) + netSalesDollars(p);
+    for (const d of dailyRevenue) {
+      dailySalesMap[d.date] = d.revenue;
     }
 
     // ── Daily labor map from Homebase timecards ──────────────────────────────
@@ -184,20 +166,6 @@ export async function getLaborRatioData(lookbackDays = 14): Promise<LaborRatioDa
         laborRatio: wages > 0 ? Math.round((fullyLoadedCost / netSales) * 100 * 10) / 10 : 0,
         hasLaborData: wages > 0,
       });
-    }
-
-    // ── DOW average sales for projections ───────────────────────────────────
-    const dowDayMap: Record<number, Record<string, number>> = {};
-    for (const p of historicalPayments) {
-      const dow = localDayOfWeek(p.createdTime, LOCAL_TZ);
-      const d   = localDateStr(p.createdTime, LOCAL_TZ);
-      if (!dowDayMap[dow]) dowDayMap[dow] = {};
-      dowDayMap[dow][d] = (dowDayMap[dow][d] ?? 0) + netSalesDollars(p);
-    }
-    const dowAvgSales: Record<number, number> = {};
-    for (const [dowStr, days] of Object.entries(dowDayMap)) {
-      const values = Object.values(days);
-      dowAvgSales[parseInt(dowStr)] = values.reduce((s, v) => s + v, 0) / values.length;
     }
 
     // ── Daily shift map ──────────────────────────────────────────────────────
@@ -233,7 +201,6 @@ export async function getLaborRatioData(lookbackDays = 14): Promise<LaborRatioDa
     }
 
     // ── Summary ratios ───────────────────────────────────────────────────────
-    const actualsWithLabor = actuals.filter((a) => a.hasLaborData);
     const totalActualSales  = actuals.reduce((s, a) => s + a.netSales, 0);
     const totalActualLabor  = actuals.reduce((s, a) => s + a.fullyLoadedCost, 0);
     const laborRatioPercent =
@@ -256,8 +223,8 @@ export async function getLaborRatioData(lookbackDays = 14): Promise<LaborRatioDa
       loadedCostFactor: LOADED_COST_MULTIPLIER,
     };
   } catch (err) {
-    console.error('getLaborRatioData failed, falling back to demo:', err);
-    return getDemoLaborRatioData();
+    console.error('getLaborRatioData failed:', err);
+    throw err instanceof Error ? err : new Error(String(err));
   }
 }
 
@@ -375,61 +342,6 @@ function computeQuietScores(payments: import('./clover').CloverPayment[]): Quiet
   });
 }
 
-/** DOW breakdown from pre-aggregated Supabase rows (sale_date, sale_hour, tx_count) */
-function computeDowBreakdownFromRows(
-  rows: Array<{ sale_date: string; sale_hour: number; tx_count: number }>
-): DayOfWeekBreakdown[] {
-  // Build daily hour-count map from pre-aggregated counts
-  const dailyHourCounts: Record<string, Record<number, number>> = {};
-  for (const row of rows) {
-    if (!dailyHourCounts[row.sale_date]) dailyHourCounts[row.sale_date] = {};
-    dailyHourCounts[row.sale_date][row.sale_hour] = row.tx_count;
-  }
-
-  // Score each hour relative to that day's traffic, then average by DOW
-  const dowHourScores: Record<number, Record<number, number[]>> = {};
-  for (const [dateStr, hourCounts] of Object.entries(dailyHourCounts)) {
-    const dow = new Date(dateStr + 'T12:00:00').getDay();
-    const counts = Object.values(hourCounts);
-    const minC = Math.min(...counts, 0);
-    const maxC = Math.max(...counts, 1);
-    const range = maxC - minC;
-
-    for (const [hourStr, count] of Object.entries(hourCounts)) {
-      const score = range === 0 ? 8 : (10 * (maxC - count)) / range;
-      const h = parseInt(hourStr);
-      if (!dowHourScores[dow]) dowHourScores[dow] = {};
-      if (!dowHourScores[dow][h]) dowHourScores[dow][h] = [];
-      dowHourScores[dow][h].push(score);
-    }
-  }
-
-  return DOW_NAMES.map((day, dow) => {
-    const hourScores = dowHourScores[dow] ?? {};
-    const avgByHour: Record<number, number> = {};
-    for (const [hourStr, scores] of Object.entries(hourScores)) {
-      avgByHour[parseInt(hourStr)] = scores.reduce((s, v) => s + v, 0) / scores.length;
-    }
-
-    const allScores = Object.values(avgByHour);
-    const avgQuietScore =
-      allScores.length > 0
-        ? Math.round((allScores.reduce((s, v) => s + v, 0) / allScores.length) * 10) / 10
-        : 5;
-
-    // Show top 3 quietest and top 3 busiest hours rather than using fixed thresholds,
-    // so there's always something meaningful to display regardless of score distribution.
-    const sorted = Object.entries(avgByHour)
-      .map(([h, s]) => ({ h: parseInt(h), s }))
-      .sort((a, b) => b.s - a.s);
-
-    const bestHours = sorted.slice(0, 3).filter(({ s }) => s >= 6).map(({ h }) => h).sort((a, b) => a - b);
-    const peakHours = sorted.slice(-3).filter(({ s }) => s < 5).map(({ h }) => h).sort((a, b) => a - b);
-
-    return { day, avgQuietScore, bestHours, peakHours };
-  });
-}
-
 function computeDowBreakdown(
   payments: import('./clover').CloverPayment[]
 ): DayOfWeekBreakdown[] {
@@ -472,15 +384,14 @@ function computeDowBreakdown(
         ? Math.round((allScores.reduce((s, v) => s + v, 0) / allScores.length) * 10) / 10
         : 5;
 
-    const bestHours = Object.entries(avgByHour)
-      .filter(([, s]) => s >= 7)
-      .map(([h]) => parseInt(h))
-      .sort((a, b) => a - b);
+    // Top 3 quietest and busiest hours rather than fixed thresholds, so there's
+    // always something meaningful to display regardless of score distribution.
+    const sorted = Object.entries(avgByHour)
+      .map(([h, s]) => ({ h: parseInt(h), s }))
+      .sort((a, b) => b.s - a.s);
 
-    const peakHours = Object.entries(avgByHour)
-      .filter(([, s]) => s < 4)
-      .map(([h]) => parseInt(h))
-      .sort((a, b) => a - b);
+    const bestHours = sorted.slice(0, 3).filter(({ s }) => s >= 6).map(({ h }) => h).sort((a, b) => a - b);
+    const peakHours = sorted.slice(-3).filter(({ s }) => s < 5).map(({ h }) => h).sort((a, b) => a - b);
 
     return { day, avgQuietScore, bestHours, peakHours };
   });

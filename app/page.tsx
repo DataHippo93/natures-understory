@@ -1,12 +1,19 @@
+import Link from 'next/link';
 import { KPICard } from '@/components/kpi-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getKPIData, getShiftAnalysisData } from '@/lib/data';
+import { getCoolerDashboard } from '@/lib/coolers';
 import { formatCurrency, formatHour } from '@/lib/utils';
 import { QuietScoreChart } from '@/components/charts/quiet-score-chart';
 
 export default async function DashboardPage() {
   const kpiData = await getKPIData();
   const shiftData = await getShiftAnalysisData(7);
+  // Coolers are secondary on this page — degrade to an explicit "unavailable"
+  // note rather than failing the whole dashboard.
+  const coolers = await getCoolerDashboard().catch(() => null);
+  const coolerAlerts = coolers?.filter((c) => c.state === 'alert') ?? [];
+  const coolerWarnings = coolers?.filter((c) => c.state === 'warning' || c.state === 'stale') ?? [];
 
   const getLaborStatus = (ratio: number, target: number) =>
     ratio <= target ? 'good' : ratio <= target + 3 ? 'warning' : 'bad';
@@ -34,6 +41,28 @@ export default async function DashboardPage() {
           {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/New_York' })}
         </p>
       </div>
+
+      {/* Cooler status strip */}
+      {coolerAlerts.length > 0 ? (
+        <Link
+          href="/coolers"
+          className="block rounded-lg px-4 py-3"
+          style={{ background: 'rgba(176,96,96,0.15)', border: '1px solid rgba(217,107,107,0.6)' }}
+        >
+          <p className="text-sm font-bold" style={{ color: '#d96b6b', fontFamily: 'var(--font-josefin)' }}>
+            ⚠ Cooler alert: {coolerAlerts.map((c) => `${c.config.display_name} (${c.currentTemp?.toFixed(0)}°F)`).join(', ')} — out of temp 30+ min. Tap for details.
+          </p>
+        </Link>
+      ) : coolers && coolers.length > 0 ? (
+        <Link href="/coolers" className="inline-flex items-center gap-2 text-xs" style={{ color: 'var(--sage)' }}>
+          <span className="h-2 w-2 rounded-full inline-block" style={{ background: coolerWarnings.length > 0 ? '#c4923a' : '#7aaa62' }} />
+          {coolerWarnings.length > 0
+            ? `${coolerWarnings.length} cooler${coolerWarnings.length > 1 ? 's' : ''} need${coolerWarnings.length > 1 ? '' : 's'} a look`
+            : `All ${coolers.length} coolers in range`}
+        </Link>
+      ) : coolers === null ? (
+        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Cooler monitor unavailable</p>
+      ) : null}
 
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

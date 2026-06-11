@@ -53,6 +53,24 @@ const sections = [
           </svg>
         ),
       },
+      {
+        href: '/coolers',
+        label: 'Coolers',
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+            <path fillRule="evenodd" d="M10 1a3 3 0 0 0-3 3v6.1a4.5 4.5 0 1 0 6 0V4a3 3 0 0 0-3-3Zm-1.5 3a1.5 1.5 0 0 1 3 0v6.9a.75.75 0 0 0 .3.6 3 3 0 1 1-3.6 0 .75.75 0 0 0 .3-.6V4Zm1.5 4.25a.75.75 0 0 1 .75.75v3.336a2 2 0 1 1-1.5 0V9a.75.75 0 0 1 .75-.75Z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
+      {
+        href: '/orders',
+        label: "Albert's Orders",
+        icon: (
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+            <path fillRule="evenodd" d="M5.5 3A2.5 2.5 0 0 0 3 5.5v9A2.5 2.5 0 0 0 5.5 17h9a2.5 2.5 0 0 0 2.5-2.5v-9A2.5 2.5 0 0 0 14.5 3h-9ZM6 6.75A.75.75 0 0 1 6.75 6h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 6 6.75Zm0 3.5a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5a.75.75 0 0 1-.75-.75Zm.75 2.75a.75.75 0 0 0 0 1.5h3.5a.75.75 0 0 0 0-1.5h-3.5Z" clipRule="evenodd" />
+          </svg>
+        ),
+      },
     ],
   },
 ];

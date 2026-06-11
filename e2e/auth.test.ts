@@ -1,7 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-const EMAIL = process.env.TEST_EMAIL ?? 'cmaine@ycconsulting.biz';
-const PASSWORD = process.env.TEST_PASSWORD ?? 'Cerises!1';
+const EMAIL = process.env.TEST_EMAIL;
+const PASSWORD = process.env.TEST_PASSWORD;
+if (!EMAIL || !PASSWORD) {
+  throw new Error('TEST_EMAIL and TEST_PASSWORD env vars are required — never hardcode credentials.');
+}
 
 test.describe('Authentication', () => {
   test('unauthenticated user is redirected to login', async ({ page }) => {

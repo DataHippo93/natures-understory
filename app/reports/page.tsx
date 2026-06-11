@@ -2,18 +2,26 @@ import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getLatestSaleDate } from '@/lib/thrive';
 
 async function getReportStats() {
   const admin = createAdminClient();
-  if (!admin) return { totalRecords: 0, lastSync: null, recentSyncs: [] };
+  if (!admin) return { totalRecords: 0, latestSaleDate: null as string | null, lastSync: null, recentSyncs: [] };
 
-  const [countRes, syncRes] = await Promise.all([
-    admin.from('sales_line_items').select('id', { count: 'exact', head: true }),
-    admin.from('sync_log').select('*').order('started_at', { ascending: false }).limit(5),
+  const [countRes, syncRes, latestSaleDate] = await Promise.all([
+    admin.from('thrive_sales_history').select('variant_id', { count: 'exact', head: true }),
+    admin
+      .from('sync_log')
+      .select('*')
+      .in('sync_type', ['thrive_sales', 'thrive_catalog', 'thrive_inventory', 'homebase_labor_daily'])
+      .order('started_at', { ascending: false })
+      .limit(5),
+    getLatestSaleDate().catch(() => null),
   ]);
 
   return {
     totalRecords: countRes.count ?? 0,
+    latestSaleDate,
     lastSync: syncRes.data?.[0] ?? null,
     recentSyncs: syncRes.data ?? [],
   };
@@ -23,7 +31,9 @@ export default async function ReportsPage() {
   const supabase = await createClient();
   const user = supabase ? (await supabase.auth.getUser()).data.user : null;
 
-  const stats = user ? await getReportStats() : { totalRecords: 0, lastSync: null, recentSyncs: [] };
+  const stats = user
+    ? await getReportStats()
+    : { totalRecords: 0, latestSaleDate: null as string | null, lastSync: null, recentSyncs: [] };
 
   const reportCards = [
     {
@@ -69,18 +79,19 @@ export default async function ReportsPage() {
           Sales Reports
         </h1>
         <p className="mt-0.5 text-sm" style={{ color: 'var(--sage)' }}>
-          Analyze revenue, categories, and item performance from Clover POS data
+          Analyze revenue, departments, and item performance from the Thrive warehouse
+          {stats.latestSaleDate && <span style={{ color: 'var(--text-muted)' }}> · data through {stats.latestSaleDate}</span>}
         </p>
       </div>
 
       {/* Quick stats */}
       <div className="grid gap-4 sm:grid-cols-3">
         <div className="rounded-lg p-4" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
-          <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Total Line Items</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Sales Records</p>
           <p className="mt-1 text-3xl font-bold" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
             {stats.totalRecords.toLocaleString()}
           </p>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>synced from Clover</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>daily item rows from Thrive</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
           <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Last Sync</p>
@@ -92,14 +103,16 @@ export default async function ReportsPage() {
           </p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
-          <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Sync Data</p>
-          <p className="text-xs mb-3" style={{ color: 'var(--sage)' }}>Pull fresh data from Clover POS into the database.</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest mb-2" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>How Data Flows</p>
+          <p className="text-xs mb-3" style={{ color: 'var(--sage)' }}>
+            Sales sync automatically from Thrive every night. No manual sync needed.
+          </p>
           <Link
             href="/reports/query"
             className="inline-block rounded px-3 py-1.5 text-xs font-bold transition-colors"
             style={{ background: 'var(--gold)', color: 'var(--forest-darkest)', fontFamily: 'var(--font-josefin)' }}
           >
-            Go to Sync &rarr;
+            Custom Query &rarr;
           </Link>
         </div>
       </div>
