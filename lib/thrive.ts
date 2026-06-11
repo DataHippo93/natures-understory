@@ -204,7 +204,19 @@ export async function getCleanupReport(): Promise<CleanupSection[]> {
          FROM thrive_sales_history s
          JOIN thrive_product_catalog c ON c.thrive_variant_id = s.variant_id
          WHERE s.sale_date >= current_date - 90
-         GROUP BY c.thrive_item_id)
+         GROUP BY c.thrive_item_id),
+       -- latest snapshot per item via LATERAL lookups: the
+       -- thrive_inventory_latest view re-scans the whole 300k-row history
+       -- (60-80s); this is ~1s.
+       latest AS (
+         SELECT c2.thrive_item_id, l.item_name, l.qty_on_hand, l.unit
+         FROM (SELECT DISTINCT thrive_item_id FROM thrive_product_catalog
+               WHERE thrive_item_id IS NOT NULL) c2
+         CROSS JOIN LATERAL (
+           SELECT item_name, qty_on_hand, unit
+           FROM thrive_inventory_history h
+           WHERE h.thrive_item_id = c2.thrive_item_id
+           ORDER BY snapshot_ts DESC LIMIT 1) l)
        SELECT il.item_name AS name, NULL AS sku, NULL AS barcode,
               max(c.department) || COALESCE(' · ' || max(v.name), '') AS categories,
               'on hand ' || il.qty_on_hand || COALESCE(' ' || il.unit, '')
@@ -212,7 +224,7 @@ export async function getCleanupReport(): Promise<CleanupSection[]> {
                 || CASE WHEN il.qty_on_hand < 0 THEN ' · NEGATIVE on-hand'
                         WHEN COALESCE(sold.units90, 0) = 0 THEN ' · no sales 90d'
                         ELSE ' · on-hand far above sales' END AS detail
-       FROM thrive_inventory_latest il
+       FROM latest il
        LEFT JOIN sold ON sold.thrive_item_id = il.thrive_item_id
        LEFT JOIN thrive_product_catalog c ON c.thrive_item_id = il.thrive_item_id
        LEFT JOIN thrive_vendors v ON v.thrive_vendor_id = c.primary_vendor_id
