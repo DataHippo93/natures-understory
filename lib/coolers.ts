@@ -128,12 +128,13 @@ export function defaultRangeForName(name: string): { min_f: number; max_f: numbe
   return /freez/i.test(name) ? DEFAULT_FREEZER_RANGE : DEFAULT_COOLER_RANGE;
 }
 
-/** Heuristic: does this HA entity look like a cooler/freezer temperature sensor? */
+/** Heuristic for AUTO-DISCOVERING new cooler/freezer sensors. Sensors already
+ *  registered in cooler_config are always recorded regardless of this check. */
 export function looksLikeCoolerSensor(entityId: string, friendlyName: string, unit: string | null): boolean {
   if (!entityId.startsWith('sensor.')) return false;
   if (unit && !/°?[FC]$/i.test(unit.trim())) return false;
   const hay = `${entityId} ${friendlyName}`.toLowerCase();
-  return /(cooler|freezer|fridge|refrigerat|walk[\s_-]?in|produce case|dairy case|deli case)/.test(hay)
+  return /(cooler|freezer|fridge|refrigerat|walk[\s_-]?in|dairy|deli|drinks|probiotic|produce case)/.test(hay)
     && /(temp|°)/.test(`${hay} ${unit ?? ''}`.toLowerCase());
 }
 
@@ -153,6 +154,8 @@ export interface HaTemperature {
   entity_id: string;
   friendly_name: string;
   temp_f: number;
+  /** Passed the cooler-name heuristic (used only for auto-discovery). */
+  looksLikeCooler: boolean;
 }
 
 function haCreds() {
@@ -162,7 +165,9 @@ function haCreds() {
   return { url, token };
 }
 
-/** Fetch all temperature-looking states from Home Assistant, normalized to °F. */
+/** Fetch ALL temperature sensors from Home Assistant, normalized to °F.
+ *  Filtering to coolers happens in syncCoolerReadings: configured sensors are
+ *  always recorded; unconfigured ones must pass the discovery heuristic. */
 export async function fetchHaTemperatures(): Promise<HaTemperature[]> {
   const { url, token } = haCreds();
   const res = await fetch(`${url}/api/states`, {
@@ -180,10 +185,16 @@ export async function fetchHaTemperatures(): Promise<HaTemperature[]> {
     const friendly = s.attributes.friendly_name ?? s.entity_id;
     const value = parseFloat(s.state);
     if (!Number.isFinite(value)) continue; // 'unavailable', 'unknown'
-    if (!looksLikeCoolerSensor(s.entity_id, friendly, unit)) continue;
+    if (!s.entity_id.startsWith('sensor.')) continue;
+    if (!unit || !/°?[FC]$/i.test(unit.trim())) continue; // temperature sensors only
 
-    const tempF = unit && /c$/i.test(unit.replace('°', '').trim()) ? celsiusToFahrenheit(value) : value;
-    out.push({ entity_id: s.entity_id, friendly_name: friendly, temp_f: Math.round(tempF * 100) / 100 });
+    const tempF = /c$/i.test(unit.replace('°', '').trim()) ? celsiusToFahrenheit(value) : value;
+    out.push({
+      entity_id: s.entity_id,
+      friendly_name: friendly,
+      temp_f: Math.round(tempF * 100) / 100,
+      looksLikeCooler: looksLikeCoolerSensor(s.entity_id, friendly, unit),
+    });
   }
 
   return out;
@@ -207,10 +218,11 @@ export async function syncCoolerReadings(): Promise<CoolerSyncResult> {
   if (cfgErr) throw new Error(`cooler_config read: ${cfgErr.message}`);
   const configs = new Map((configRows ?? []).map((c) => [c.entity_id, c as CoolerConfig & { active: boolean }]));
 
-  // Auto-register sensors we haven't seen before, with sensible default ranges.
+  // Auto-register UNSEEN sensors that look like coolers, with default ranges.
   const newlyDiscovered: string[] = [];
   for (const t of temps) {
     if (configs.has(t.entity_id)) continue;
+    if (!t.looksLikeCooler) continue;
     const range = defaultRangeForName(`${t.entity_id} ${t.friendly_name}`);
     const row = {
       entity_id: t.entity_id,
