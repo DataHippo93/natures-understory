@@ -30,7 +30,18 @@ async function fetchWithRetry(url: string, init: RequestInit, retries = 4): Prom
   return fetch(url, init);
 }
 
+// Short-lived in-process cache. Several page renders (and the e2e suite's
+// repeated dashboard loads) request identical payment windows back-to-back;
+// without this the bursts trip Clover's rate limit (429).
+const paymentsCache = new Map<string, { at: number; data: CloverPayment[] }>();
+const PAYMENTS_CACHE_TTL_MS = 60_000;
+
 export async function fetchPayments(startMs: number, endMs: number): Promise<CloverPayment[]> {
+  // Bucket the window to the minute so "now"-anchored requests share entries.
+  const cacheKey = `${Math.floor(startMs / 60_000)}:${Math.floor(endMs / 60_000)}`;
+  const hit = paymentsCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < PAYMENTS_CACHE_TTL_MS) return hit.data;
+
   const { mid, token } = getCreds();
   const payments: CloverPayment[] = [];
   let offset = 0;
@@ -59,6 +70,12 @@ export async function fetchPayments(startMs: number, endMs: number): Promise<Clo
     offset += limit;
   }
 
+  paymentsCache.set(cacheKey, { at: Date.now(), data: payments });
+  if (paymentsCache.size > 50) {
+    // drop oldest entries so long-lived processes don't accumulate windows
+    const oldest = [...paymentsCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (oldest) paymentsCache.delete(oldest[0]);
+  }
   return payments;
 }
 
