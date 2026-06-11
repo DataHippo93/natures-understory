@@ -7,6 +7,8 @@ import { LaborProjectionsTable } from '@/components/tables/labor-projections-tab
 import { LookbackFilter } from '@/components/lookback-filter';
 import { formatCurrency } from '@/lib/utils';
 
+export const dynamic = 'force-dynamic';
+
 const TARGET = 25;
 const ratioColor = (r: number) =>
   r <= TARGET ? '#7aaa62' : r <= TARGET + 3 ? '#c4923a' : '#b06060';

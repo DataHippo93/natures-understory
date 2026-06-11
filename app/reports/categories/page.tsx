@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { CategorySalesChart } from '@/components/charts/category-sales-chart';
 import { LookbackFilter } from '@/components/lookback-filter';
 
+export const dynamic = 'force-dynamic';
+
 export default async function CategorySalesPage({
   searchParams,
 }: {

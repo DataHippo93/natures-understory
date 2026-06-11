@@ -5,6 +5,8 @@ import { QuietScoreChart } from '@/components/charts/quiet-score-chart';
 import { DOWBreakdownTable } from '@/components/tables/dow-breakdown-table';
 import { LookbackFilter } from '@/components/lookback-filter';
 
+export const dynamic = 'force-dynamic';
+
 export default async function ShiftAnalysisPage({
   searchParams,
 }: {

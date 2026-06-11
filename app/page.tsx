@@ -6,6 +6,9 @@ import { getCoolerDashboard } from '@/lib/coolers';
 import { formatCurrency, formatHour } from '@/lib/utils';
 import { QuietScoreChart } from '@/components/charts/quiet-score-chart';
 
+// Live operational data on every request — never prerender at build time.
+export const dynamic = 'force-dynamic';
+
 export default async function DashboardPage() {
   const kpiData = await getKPIData();
   const shiftData = await getShiftAnalysisData(7);

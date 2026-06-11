@@ -5,6 +5,8 @@ import { formatCurrency } from '@/lib/utils';
 import type { RosterDay } from '@/lib/types';
 import { ScheduleDatePicker } from '@/components/schedule-date-picker';
 
+export const dynamic = 'force-dynamic';
+
 function formatShiftTime(isoStr: string): string {
   return new Date(isoStr).toLocaleTimeString('en-US', {
     hour: 'numeric',

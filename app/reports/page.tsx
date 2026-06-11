@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getLatestSaleDate } from '@/lib/thrive';
 
+export const dynamic = 'force-dynamic';
+
 async function getReportStats() {
   const admin = createAdminClient();
   if (!admin) return { totalRecords: 0, latestSaleDate: null as string | null, lastSync: null, recentSyncs: [] };

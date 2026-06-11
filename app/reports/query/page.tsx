@@ -4,6 +4,8 @@ import { QueryInterface } from '@/components/query-interface';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+export const dynamic = 'force-dynamic';
+
 async function getSavedViews(userId: string) {
   const admin = createAdminClient();
   if (!admin) return [];

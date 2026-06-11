@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { LookbackFilter } from '@/components/lookback-filter';
 import { ItemsTable } from '@/components/tables/items-table';
 
+export const dynamic = 'force-dynamic';
+
 export default async function ItemSalesPage({
   searchParams,
 }: {
