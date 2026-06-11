@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
-import { getDepartmentSales, getLatestSaleDate, type DepartmentSales } from '@/lib/thrive';
+import { getDepartmentSales, getLatestSaleDate, resolveSalesWindow, type DepartmentSales } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { CategorySalesChart } from '@/components/charts/category-sales-chart';
 import { LookbackFilter } from '@/components/lookback-filter';
@@ -10,10 +10,11 @@ export const dynamic = 'force-dynamic';
 export default async function CategorySalesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; sort?: string }>;
+  searchParams: Promise<{ days?: string; sort?: string; month?: string }>;
 }) {
   const params = await searchParams;
-  const days = Math.min(365, Math.max(7, parseInt(params.days ?? '30') || 30));
+  const win = resolveSalesWindow(params);
+  const days = win.days;
   const sort = params.sort ?? 'revenue';
 
   const supabase = await createClient();
@@ -22,7 +23,7 @@ export default async function CategorySalesPage({
   let rows: DepartmentSales[] = [];
   let latestSaleDate: string | null = null;
   if (user) {
-    [rows, latestSaleDate] = await Promise.all([getDepartmentSales(days), getLatestSaleDate()]);
+    [rows, latestSaleDate] = await Promise.all([getDepartmentSales(days, win), getLatestSaleDate()]);
   }
 
   const sortedRows = [...rows].sort((a, b) => {
@@ -49,7 +50,7 @@ export default async function CategorySalesPage({
           </p>
         </div>
         <Suspense>
-          <LookbackFilter current={days} />
+          <LookbackFilter current={days} currentMonth={win.month} monthLabel={win.month ? win.label : null} />
         </Suspense>
       </div>
 
@@ -60,14 +61,14 @@ export default async function CategorySalesPage({
           <p className="mt-1 text-2xl font-bold" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
             ${totalRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>last {days} days</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{win.label}</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
           <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Units Sold</p>
           <p className="mt-1 text-2xl font-bold" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
             {totalItems.toLocaleString()}
           </p>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>last {days} days</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{win.label}</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
           <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Gross Profit</p>

@@ -15,20 +15,38 @@ const PRESETS = [
 interface LookbackFilterProps {
   current: number;
   paramName?: string;
+  /** Active calendar month (YYYY-MM) — set via ?month=, overrides day presets. */
+  currentMonth?: string | null;
+  monthLabel?: string | null;
 }
 
-export function LookbackFilter({ current, paramName = 'days' }: LookbackFilterProps) {
+export function LookbackFilter({
+  current,
+  paramName = 'days',
+  currentMonth = null,
+  monthLabel = null,
+}: LookbackFilterProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [customValue, setCustomValue] = useState('');
   const [showCustom, setShowCustom] = useState(false);
+  const [monthValue, setMonthValue] = useState(currentMonth ?? '');
 
-  const isPreset = PRESETS.some((p) => p.days === current);
+  const isPreset = PRESETS.some((p) => p.days === current) && !currentMonth;
 
   const navigate = (days: number) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set(paramName, String(days));
+    params.delete('month');
+    router.push(`${pathname}?${params.toString()}`);
+  };
+
+  const navigateMonth = (month: string) => {
+    if (!/^\d{4}-\d{2}$/.test(month)) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('month', month);
+    params.delete(paramName);
     router.push(`${pathname}?${params.toString()}`);
   };
 
@@ -50,7 +68,7 @@ export function LookbackFilter({ current, paramName = 'days' }: LookbackFilterPr
 
       <div className="flex items-center gap-1">
         {PRESETS.map((p) => {
-          const active = current === p.days && !showCustom;
+          const active = current === p.days && !showCustom && !currentMonth;
           return (
             <button
               key={p.days}
@@ -105,8 +123,31 @@ export function LookbackFilter({ current, paramName = 'days' }: LookbackFilterPr
         )}
       </div>
 
+      {/* Calendar month */}
+      <div className="flex items-center gap-1 ml-1">
+        <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>
+          or month
+        </span>
+        <input
+          type="month"
+          value={monthValue}
+          max={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }).slice(0, 7)}
+          onChange={(e) => {
+            setMonthValue(e.target.value);
+            if (e.target.value) navigateMonth(e.target.value);
+          }}
+          className="rounded px-2 py-1 text-xs outline-none"
+          style={{
+            background: currentMonth ? 'var(--gold)' : 'var(--forest-darkest)',
+            color: currentMonth ? 'var(--forest-darkest)' : 'var(--cream)',
+            border: `1px solid ${currentMonth ? 'var(--gold)' : 'var(--forest-mid)'}`,
+            colorScheme: 'dark',
+          }}
+        />
+      </div>
+
       <span className="text-xs ml-1" style={{ color: 'var(--text-muted)' }}>
-        ({current} days)
+        ({monthLabel ?? `${current} days`})
       </span>
     </div>
   );

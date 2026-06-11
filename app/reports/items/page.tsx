@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
-import { getItemSales, getDepartmentSales, getLatestSaleDate, type ItemSales } from '@/lib/thrive';
+import { getItemSales, getDepartmentSales, getLatestSaleDate, resolveSalesWindow, type ItemSales } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { LookbackFilter } from '@/components/lookback-filter';
 import { ItemsTable } from '@/components/tables/items-table';
@@ -10,10 +10,11 @@ export const dynamic = 'force-dynamic';
 export default async function ItemSalesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; category?: string; search?: string }>;
+  searchParams: Promise<{ days?: string; category?: string; search?: string; month?: string }>;
 }) {
   const params = await searchParams;
-  const days = Math.min(365, Math.max(7, parseInt(params.days ?? '30') || 30));
+  const win = resolveSalesWindow(params);
+  const days = win.days;
   const departmentFilter = params.category ?? null;
   const searchFilter = (params.search ?? '').toLowerCase();
 
@@ -25,8 +26,8 @@ export default async function ItemSalesPage({
   let latestSaleDate: string | null = null;
   if (user) {
     const [itemRows, deptRows, latest] = await Promise.all([
-      getItemSales(days, 500, departmentFilter),
-      getDepartmentSales(days),
+      getItemSales(days, 500, departmentFilter, win),
+      getDepartmentSales(days, win),
       getLatestSaleDate(),
     ]);
     items = itemRows;
@@ -54,7 +55,7 @@ export default async function ItemSalesPage({
           </p>
         </div>
         <Suspense>
-          <LookbackFilter current={days} />
+          <LookbackFilter current={days} currentMonth={win.month} monthLabel={win.month ? win.label : null} />
         </Suspense>
       </div>
 
@@ -71,7 +72,7 @@ export default async function ItemSalesPage({
           <p className="mt-1 text-2xl font-bold" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
             ${totalRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>last {days} days{departmentFilter ? ` · ${departmentFilter}` : ''}</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{win.label}{departmentFilter ? ` · ${departmentFilter}` : ''}</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
           <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Units Sold</p>

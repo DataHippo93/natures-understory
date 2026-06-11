@@ -55,6 +55,41 @@ function assertDate(s: string): string {
   return s;
 }
 
+/** A resolved reporting window: either a trailing-days lookback or a
+ *  calendar month (?month=YYYY-MM). */
+export interface SalesWindow {
+  start: string; // YYYY-MM-DD inclusive
+  end: string;   // YYYY-MM-DD inclusive
+  label: string; // human label, e.g. "June 2026" or "last 30 days"
+  days: number;  // lookback days (kept for the day-preset UI state)
+  month: string | null; // YYYY-MM when a calendar month is active
+}
+
+export function resolveSalesWindow(params: { days?: string; month?: string }): SalesWindow {
+  const today = todayStr();
+  const m = params.month;
+  if (m && /^\d{4}-\d{2}$/.test(m) && `${m}-01` <= today) {
+    const [y, mo] = m.split('-').map(Number);
+    const lastDay = new Date(y, mo, 0).getDate();
+    const endOfMonth = `${m}-${String(lastDay).padStart(2, '0')}`;
+    return {
+      start: `${m}-01`,
+      end: endOfMonth < today ? endOfMonth : today,
+      label: new Date(y, mo - 1, 15).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      days: 30,
+      month: m,
+    };
+  }
+  const days = Math.min(365, Math.max(7, parseInt(params.days ?? '30') || 30));
+  return {
+    start: offsetDateStr(today, -days),
+    end: today,
+    label: `last ${days} days`,
+    days,
+    month: null,
+  };
+}
+
 async function reportQuery<T>(sql: string): Promise<T[]> {
   const admin = createAdminClient();
   if (!admin) throw new Error('Supabase admin client not configured');
@@ -72,10 +107,13 @@ export async function getLatestSaleDate(): Promise<string | null> {
   return rows[0]?.d ?? null;
 }
 
-/** Revenue by department over the trailing N days (ending at latest synced day). */
-export async function getDepartmentSales(days: number): Promise<DepartmentSales[]> {
-  const end = assertDate(todayStr());
-  const start = assertDate(offsetDateStr(end, -Math.max(1, Math.min(365, days))));
+/** Revenue by department over the trailing N days, or an explicit window. */
+export async function getDepartmentSales(
+  days: number,
+  win?: { start: string; end: string }
+): Promise<DepartmentSales[]> {
+  const end = assertDate(win?.end ?? todayStr());
+  const start = assertDate(win?.start ?? offsetDateStr(end, -Math.max(1, Math.min(365, days))));
 
   const rows = await reportQuery<{
     department: string;
@@ -111,10 +149,11 @@ export async function getDepartmentSales(days: number): Promise<DepartmentSales[
 export async function getItemSales(
   days: number,
   limit = 100,
-  department: string | null = null
+  department: string | null = null,
+  win?: { start: string; end: string }
 ): Promise<ItemSales[]> {
-  const end = assertDate(todayStr());
-  const start = assertDate(offsetDateStr(end, -Math.max(1, Math.min(365, days))));
+  const end = assertDate(win?.end ?? todayStr());
+  const start = assertDate(win?.start ?? offsetDateStr(end, -Math.max(1, Math.min(365, days))));
   const lim = Math.max(1, Math.min(500, Math.floor(limit)));
   const deptClause = department
     ? `AND COALESCE(c.department, 'Uncategorized') = '${department.replace(/'/g, "''")}'`
