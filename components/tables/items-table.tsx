@@ -5,6 +5,8 @@ interface ItemRow {
   category_name: string | null;
   revenue: number;
   items_sold: number;
+  brand?: string | null;
+  margin_pct?: number | null;
 }
 
 interface ItemsTableProps {
@@ -13,12 +15,16 @@ interface ItemsTableProps {
 
 export function ItemsTable({ rows }: ItemsTableProps) {
   const maxRevenue = rows[0]?.revenue ?? 1;
+  const hasMargin = rows.some((r) => r.margin_pct != null);
+
+  const headers = ['#', 'Item', 'Department', 'Revenue', 'Units Sold', 'Avg Price'];
+  if (hasMargin) headers.push('Margin');
 
   return (
     <table className="w-full text-xs">
       <thead>
         <tr style={{ borderBottom: '1px solid var(--forest-mid)' }}>
-          {['#', 'Item', 'Category', 'Revenue', 'Units Sold', 'Avg Price'].map((h) => (
+          {headers.map((h) => (
             <th
               key={h}
               className="px-4 py-3 text-left font-bold uppercase tracking-widest"
@@ -41,7 +47,12 @@ export function ItemsTable({ rows }: ItemsTableProps) {
               <td className="px-4 py-2.5" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
               <td className="px-4 py-2.5">
                 <div>
-                  <p className="font-medium" style={{ color: 'var(--cream)' }}>{row.item_name}</p>
+                  <p className="font-medium" style={{ color: 'var(--cream)' }}>
+                    {row.item_name}
+                    {row.brand && (
+                      <span className="ml-1.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>{row.brand}</span>
+                    )}
+                  </p>
                   <div className="mt-0.5 h-1 w-24 rounded-full overflow-hidden" style={{ background: 'var(--forest-mid)' }}>
                     <div
                       className="h-full rounded-full"
@@ -71,6 +82,11 @@ export function ItemsTable({ rows }: ItemsTableProps) {
               <td className="px-4 py-2.5" style={{ color: 'var(--text-muted)' }}>
                 ${avgPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </td>
+              {hasMargin && (
+                <td className="px-4 py-2.5" style={{ color: (row.margin_pct ?? 0) >= 30 ? 'var(--sage)' : '#b06060' }}>
+                  {row.margin_pct != null ? `${row.margin_pct.toFixed(1)}%` : '—'}
+                </td>
+              )}
             </tr>
           );
         })}

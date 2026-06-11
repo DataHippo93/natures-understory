@@ -1,7 +1,6 @@
 import { Suspense } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { QueryInterface } from '@/components/query-interface';
-import { SyncPanel } from '@/components/sync-panel';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -20,19 +19,13 @@ async function getSavedViews(userId: string) {
 async function getDateRange() {
   const admin = createAdminClient();
   if (!admin) return { min: null, max: null };
-  const { data } = await admin
-    .from('sales_line_items')
-    .select('sale_date')
-    .order('sale_date', { ascending: true })
-    .limit(1);
-  const { data: maxData } = await admin
-    .from('sales_line_items')
-    .select('sale_date')
-    .order('sale_date', { ascending: false })
-    .limit(1);
+  const [minRes, maxRes] = await Promise.all([
+    admin.from('thrive_sales_history').select('sale_date').order('sale_date', { ascending: true }).limit(1),
+    admin.from('thrive_sales_history').select('sale_date').order('sale_date', { ascending: false }).limit(1),
+  ]);
   return {
-    min: data?.[0]?.sale_date ?? null,
-    max: maxData?.[0]?.sale_date ?? null,
+    min: minRes.data?.[0]?.sale_date ?? null,
+    max: maxRes.data?.[0]?.sale_date ?? null,
   };
 }
 
@@ -48,13 +41,14 @@ export default async function QueryPage() {
   const thirtyDaysAgo = new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
   const defaultSql = `SELECT
-  category_name,
-  ROUND(SUM(net_price_cents) / 100.0, 2) AS revenue,
-  SUM(quantity) AS units_sold,
-  COUNT(*) AS line_items
-FROM sales_line_items
-WHERE sale_date BETWEEN '${thirtyDaysAgo}' AND '${today}'
-GROUP BY category_name
+  COALESCE(c.department, 'Uncategorized') AS department,
+  ROUND(SUM(s.revenue_cents) / 100.0, 2) AS revenue,
+  ROUND(SUM(s.units)) AS units_sold,
+  ROUND(SUM(s.profit_cents) / 100.0, 2) AS profit
+FROM thrive_sales_history s
+LEFT JOIN thrive_product_catalog c ON c.thrive_variant_id = s.variant_id
+WHERE s.sale_date BETWEEN '${thirtyDaysAgo}' AND '${today}'
+GROUP BY 1
 ORDER BY revenue DESC`;
 
   return (
@@ -64,7 +58,7 @@ ORDER BY revenue DESC`;
           Custom Query
         </h1>
         <p className="mt-0.5 text-sm" style={{ color: 'var(--sage)' }}>
-          Build and run SQL queries against your sales data. Only SELECT queries are permitted.
+          Build and run SQL queries against the Thrive warehouse. Only SELECT queries are permitted.
         </p>
       </div>
 
@@ -77,7 +71,7 @@ ORDER BY revenue DESC`;
           <span className="text-xs" style={{ color: 'var(--cream)' }}>
             {dateRange.min && dateRange.max
               ? `${dateRange.min} → ${dateRange.max}`
-              : 'No data synced yet'}
+              : 'No data in warehouse'}
           </span>
         </div>
         <div>
@@ -85,7 +79,7 @@ ORDER BY revenue DESC`;
             Available Tables:{' '}
           </span>
           <span className="text-xs font-mono" style={{ color: 'var(--sage)' }}>
-            sales_line_items, sales_categories, sales_items
+            thrive_sales_history, thrive_product_catalog, thrive_vendors, homebase_labor_daily, homebase_shifts_worked, homebase_shifts_scheduled
           </span>
         </div>
       </div>
@@ -129,19 +123,6 @@ ORDER BY revenue DESC`;
           <Suspense>
             <QueryInterface defaultSql={defaultSql} savedViews={savedViews} />
           </Suspense>
-
-          {/* Sync panel */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Sync Data from Clover</CardTitle>
-              <CardDescription>Pull fresh POS data into the database before running queries</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Suspense>
-                <SyncPanel />
-              </Suspense>
-            </CardContent>
-          </Card>
         </div>
       </div>
 
@@ -149,30 +130,35 @@ ORDER BY revenue DESC`;
       <Card>
         <CardHeader>
           <CardTitle>Schema Reference</CardTitle>
-          <CardDescription>Available columns for queries</CardDescription>
+          <CardDescription>Most useful columns for queries</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 sm:grid-cols-3 text-xs">
             {[
               {
-                table: 'sales_line_items',
+                table: 'thrive_sales_history',
                 columns: [
-                  'id TEXT', 'order_id TEXT', 'item_id TEXT', 'item_name TEXT',
-                  'category_id TEXT', 'category_name TEXT', 'quantity INTEGER',
-                  'unit_price_cents INTEGER', 'discount_cents INTEGER',
-                  'net_price_cents INTEGER', 'sale_date DATE', 'sale_hour SMALLINT',
-                  'sale_ts TIMESTAMPTZ', 'pos_source TEXT',
+                  'variant_id TEXT', 'sale_date DATE', 'item_name TEXT',
+                  'variant_name TEXT', 'sku TEXT', 'units NUMERIC',
+                  'revenue_cents INTEGER', 'cost_cents INTEGER',
+                  'profit_cents INTEGER', 'margin_pct NUMERIC',
                 ],
               },
               {
-                table: 'sales_categories',
-                columns: ['id TEXT', 'name TEXT', 'pos_source TEXT', 'sort_order INTEGER'],
+                table: 'thrive_product_catalog',
+                columns: [
+                  'thrive_variant_id TEXT', 'name TEXT', 'brand TEXT',
+                  'department TEXT', 'category_path TEXT', 'sku TEXT',
+                  'price_cents INTEGER', 'default_cost_cents INTEGER',
+                  'primary_vendor_id TEXT', 'active BOOLEAN',
+                ],
               },
               {
-                table: 'sales_items',
+                table: 'homebase_labor_daily',
                 columns: [
-                  'id TEXT', 'name TEXT', 'category_id TEXT', 'category_name TEXT',
-                  'price_cents INTEGER', 'pos_source TEXT', 'active BOOLEAN',
+                  'business_date DATE', 'regular_hours NUMERIC',
+                  'paid_hours NUMERIC', 'scheduled_hours NUMERIC',
+                  'daily_overtime_hours NUMERIC', 'costs_cents INTEGER',
                 ],
               },
             ].map((t) => (

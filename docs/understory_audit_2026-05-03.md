@@ -197,8 +197,8 @@ Neither option needs to be picked today — the existing dashboards
 ### ⚠️ Security flags in this file
 
 ```ts
-const EMAIL = process.env.TEST_EMAIL ?? 'cmaine@ycconsulting.biz';
-const PASSWORD = process.env.TEST_PASSWORD ?? 'Cerises!1';
+const EMAIL = process.env.TEST_EMAIL ?? '<redacted personal email>';
+const PASSWORD = process.env.TEST_PASSWORD ?? '<redacted>';
 ```
 
 Clark's personal credentials are checked into the public(-ish) repo as fallbacks. **Action:** rotate the password Clark currently uses for that account, replace the fallbacks with `throw new Error('TEST_EMAIL not set')`, and create a dedicated `e2e@natures-understory` test user in Supabase Auth (Mission 3 of this session — see `006_e2e_test_user_seed.sql` migration drafted on this branch).
