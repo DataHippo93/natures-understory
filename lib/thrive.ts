@@ -133,8 +133,15 @@ const CLEANUP_COLS = `
  *  the source. Active items only; each list capped at 500 rows. */
 export async function getCleanupReport(): Promise<CleanupSection[]> {
   const q = (sql: string) => reportQuery<CleanupItem>(sql);
+  const auditDetail = (kind: 'tax' | 'ebt') => `
+    (CASE WHEN ${kind === 'tax' ? 'register_taxed' : 'register_ebt'}
+          THEN 'register: ${kind === 'tax' ? 'TAXED' : 'EBT-eligible'}'
+          ELSE 'register: ${kind === 'tax' ? 'not taxed' : 'NOT EBT'}' END)
+    || ' · AI: ' || COALESCE(ai_class, '?')
+    || ' (' || round(COALESCE(ai_confidence, 0) * 100) || '%) — '
+    || COALESCE(ai_reasoning, '')`;
   const [noVendor, conflicting, noBarcode, lowMargin, taxAmbiguous, likelyEbt,
-         noSales, naming, stockTake] = await Promise.all([
+         noSales, naming, stockTake, taxConflicts, ebtConflicts] = await Promise.all([
     q(`SELECT ${CLEANUP_COLS}, department AS detail
        FROM thrive_product_catalog
        WHERE active AND jsonb_array_length(${VENDORS}) = 0
@@ -233,9 +240,23 @@ export async function getCleanupReport(): Promise<CleanupSection[]> {
           OR (il.qty_on_hand >= 20 AND il.qty_on_hand > 4 * COALESCE(sold.units90, 0))
        GROUP BY il.item_name, il.qty_on_hand, il.unit, sold.units90
        ORDER BY il.qty_on_hand ASC LIMIT 500`),
+    q(`SELECT item_name AS name, NULL AS sku, barcode, categories,
+              ${auditDetail('tax')} AS detail
+       FROM item_tax_audit WHERE conflict
+       ORDER BY ai_confidence DESC NULLS LAST, item_name LIMIT 500`),
+    q(`SELECT item_name AS name, NULL AS sku, barcode, categories,
+              ${auditDetail('ebt')} AS detail
+       FROM item_tax_audit WHERE ebt_conflict
+       ORDER BY ai_confidence DESC NULLS LAST, item_name LIMIT 500`),
   ]);
 
   return [
+    { key: 'taxconflict', title: 'Tax Conflicts (AI vs Register)', detailLabel: 'Register vs AI',
+      description: 'The register’s actual tax assignment disagrees with an AI read of NY State rules (TB-ST-525 family) for this item. Sorted most-confident first — review and fix whichever side is wrong in Thrive. AI judgments are advisory, not tax advice.',
+      items: taxConflicts },
+    { key: 'ebtconflict', title: 'EBT Conflicts (AI vs Register)', detailLabel: 'Register vs AI',
+      description: 'The register’s EBT category status disagrees with an AI read of federal SNAP rules. Items wrongly NOT marked EBT block legitimate SNAP purchases; items wrongly marked EBT are a compliance risk. Sorted most-confident first.',
+      items: ebtConflicts },
     { key: 'vendors', title: 'No Vendor Configured', detailLabel: 'Department',
       description: 'Active items with no vendor in Thrive. These can’t flow through PO ordering and show a blank Brand on the Loss Tally sheet. Fix: item → Vendors in Thrive.',
       items: noVendor },

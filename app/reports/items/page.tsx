@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
-import { getItemSales, getDepartmentSales, getLatestSaleDate, resolveSalesWindow, type ItemSales } from '@/lib/thrive';
+import { getItemSales, getDepartmentSales, getLatestSaleDate, resolveSalesWindow, type DepartmentSales, type ItemSales } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { LookbackFilter } from '@/components/lookback-filter';
 import { ItemsTable } from '@/components/tables/items-table';
@@ -23,6 +23,7 @@ export default async function ItemSalesPage({
 
   let items: ItemSales[] = [];
   let departments: string[] = [];
+  let deptSales: DepartmentSales[] = [];
   let latestSaleDate: string | null = null;
   if (user) {
     const [itemRows, deptRows, latest] = await Promise.all([
@@ -31,6 +32,7 @@ export default async function ItemSalesPage({
       getLatestSaleDate(),
     ]);
     items = itemRows;
+    deptSales = deptRows;
     departments = deptRows.map((d) => d.department);
     latestSaleDate = latest;
   }
@@ -39,8 +41,29 @@ export default async function ItemSalesPage({
     ? items.filter((r) => r.itemName.toLowerCase().includes(searchFilter))
     : items;
 
-  const totalRevenue = filtered.reduce((s, r) => s + r.revenue, 0);
-  const totalItems = filtered.reduce((s, r) => s + r.unitsSold, 0);
+  // Summary cards must reflect ALL sales in the window, not just the top-500
+  // rows the table shows — sum the (complete) department aggregates instead.
+  // With a search filter the cards describe the matched subset.
+  const deptRowsAll = departments.length > 0;
+  const fullStats = (() => {
+    if (searchFilter || !deptRowsAll) {
+      return {
+        revenue: filtered.reduce((s, r) => s + r.revenue, 0),
+        units: filtered.reduce((s, r) => s + r.unitsSold, 0),
+        scope: searchFilter ? 'matching search' : 'top items shown',
+      };
+    }
+    const src = departmentFilter
+      ? deptSales.filter((d) => d.department === departmentFilter)
+      : deptSales;
+    return {
+      revenue: src.reduce((s, d) => s + d.revenue, 0),
+      units: src.reduce((s, d) => s + d.unitsSold, 0),
+      scope: 'all sales in period',
+    };
+  })();
+  const totalRevenue = fullStats.revenue;
+  const totalItems = fullStats.units;
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -72,7 +95,7 @@ export default async function ItemSalesPage({
           <p className="mt-1 text-2xl font-bold" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
             ${totalRevenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </p>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{win.label}{departmentFilter ? ` · ${departmentFilter}` : ''}</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{win.label}{departmentFilter ? ` · ${departmentFilter}` : ''} · {fullStats.scope}</p>
         </div>
         <div className="rounded-lg p-4" style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)' }}>
           <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Units Sold</p>
@@ -86,7 +109,7 @@ export default async function ItemSalesPage({
           <p className="mt-1 text-2xl font-bold" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
             {filtered.length.toLocaleString()}
           </p>
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{searchFilter ? 'matching search' : 'with sales'}</p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{searchFilter ? 'matching search' : filtered.length >= 500 ? 'top 500 shown' : 'with sales'}</p>
         </div>
       </div>
 
