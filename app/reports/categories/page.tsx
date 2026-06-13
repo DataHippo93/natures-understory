@@ -1,8 +1,10 @@
 import { Suspense } from 'react';
+import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
-import { getDepartmentSales, getLatestSaleDate, resolveSalesWindow, type DepartmentSales } from '@/lib/thrive';
+import { getDepartmentSales, getLatestSaleDate, getMonthlySales, resolveSalesWindow, type DepartmentSales } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { CategorySalesChart } from '@/components/charts/category-sales-chart';
+import { MonthlyTrendChart } from '@/components/charts/monthly-trend-chart';
 import { LookbackFilter } from '@/components/lookback-filter';
 
 export const dynamic = 'force-dynamic';
@@ -10,20 +12,32 @@ export const dynamic = 'force-dynamic';
 export default async function CategorySalesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ days?: string; sort?: string; month?: string }>;
+  searchParams: Promise<{ days?: string; sort?: string; month?: string; dept?: string }>;
 }) {
   const params = await searchParams;
   const win = resolveSalesWindow(params);
   const days = win.days;
   const sort = params.sort ?? 'revenue';
+  const trendDept = params.dept ?? null; // scopes the month-over-month chart
 
   const supabase = await createClient();
   const user = supabase ? (await supabase.auth.getUser()).data.user : null;
 
   let rows: DepartmentSales[] = [];
   let latestSaleDate: string | null = null;
+  let monthly: Awaited<ReturnType<typeof getMonthlySales>> = [];
+  let produceLossByDept: Record<string, number> = {};
   if (user) {
-    [rows, latestSaleDate] = await Promise.all([getDepartmentSales(days, win), getLatestSaleDate()]);
+    [rows, latestSaleDate, monthly] = await Promise.all([
+      getDepartmentSales(days, win),
+      getLatestSaleDate(),
+      getMonthlySales(12, trendDept),
+    ]);
+    // Loss dollars in the current window, per department (Produce today).
+    try {
+      const { getDepartmentLoss } = await import('@/lib/thrive');
+      produceLossByDept = await getDepartmentLoss(win);
+    } catch { produceLossByDept = {}; }
   }
 
   const sortedRows = [...rows].sort((a, b) => {
@@ -81,6 +95,40 @@ export default async function CategorySalesPage({
         </div>
       </div>
 
+      {/* Month-over-month revenue + margin trend */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle>Revenue &amp; Margin by Month{trendDept ? ` — ${trendDept}` : ''}</CardTitle>
+              <CardDescription>
+                Last 12 months. Bars = revenue, green line = margin.
+                {monthly.some((m) => m.lossDollars > 0) && ' Dashed red = margin after produce loss.'}
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)' }}>Scope</span>
+              {[{ label: 'All', dept: null }, ...rows.slice(0, 6).map((r) => ({ label: r.department, dept: r.department }))].map((o) => {
+                const active = (o.dept ?? null) === trendDept;
+                const qp = new URLSearchParams();
+                if (win.month) qp.set('month', win.month); else qp.set('days', String(days));
+                if (o.dept) qp.set('dept', o.dept);
+                if (sort !== 'revenue') qp.set('sort', sort);
+                return (
+                  <a key={o.label} href={`?${qp.toString()}`} className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest"
+                     style={{ background: active ? 'var(--gold)' : 'var(--forest-mid)', color: active ? 'var(--forest-darkest)' : 'var(--sage)', fontFamily: 'var(--font-josefin)' }}>
+                    {o.label}
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <MonthlyTrendChart data={monthly} showLoss={trendDept === null || trendDept === 'Produce'} />
+        </CardContent>
+      </Card>
+
       {/* Chart */}
       <Card>
         <CardHeader>
@@ -128,7 +176,7 @@ export default async function CategorySalesPage({
             <table className="w-full text-xs">
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--forest-mid)' }}>
-                  {['#', 'Department', 'Revenue', 'Units Sold', 'Margin', '% of Total'].map((h) => (
+                  {['#', 'Department', 'Revenue', 'Units Sold', 'Margin', 'Loss $', 'Margin w/ Loss', '% of Total'].map((h) => (
                     <th key={h} className="px-4 py-3 text-left font-bold uppercase tracking-widest" style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)', fontSize: '10px' }}>
                       {h}
                     </th>
@@ -142,7 +190,16 @@ export default async function CategorySalesPage({
                     style={{ borderBottom: i < sortedRows.length - 1 ? '1px solid var(--forest-mid)' : undefined }}
                   >
                     <td className="px-4 py-3" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
-                    <td className="px-4 py-3 font-medium" style={{ color: 'var(--cream)' }}>{row.department}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <Link
+                        href={`/reports/items?category=${encodeURIComponent(row.department)}${win.month ? `&month=${win.month}` : `&days=${days}`}`}
+                        className="inline-flex items-center gap-1 hover:underline"
+                        style={{ color: 'var(--cream)' }}
+                      >
+                        {row.department}
+                        <span style={{ color: 'var(--gold)', fontSize: '11px' }}>↗</span>
+                      </Link>
+                    </td>
                     <td className="px-4 py-3 font-semibold" style={{ color: '#c4923a' }}>
                       ${row.revenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
@@ -150,6 +207,21 @@ export default async function CategorySalesPage({
                     <td className="px-4 py-3" style={{ color: row.marginPct >= 30 ? 'var(--sage)' : '#b06060' }}>
                       {row.marginPct.toFixed(1)}%
                     </td>
+                    {(() => {
+                      const loss = produceLossByDept[row.department] ?? 0;
+                      const marginWithLoss = row.revenue > 0
+                        ? ((row.profit - loss) / row.revenue) * 100 : 0;
+                      return (
+                        <>
+                          <td className="px-4 py-3" style={{ color: loss > 0 ? '#b06060' : 'var(--text-muted)' }}>
+                            {loss > 0 ? `$${loss.toLocaleString('en-US', { maximumFractionDigits: 0 })}` : '—'}
+                          </td>
+                          <td className="px-4 py-3" style={{ color: loss > 0 ? '#d96b6b' : 'var(--text-muted)' }}>
+                            {loss > 0 ? `${marginWithLoss.toFixed(1)}%` : '—'}
+                          </td>
+                        </>
+                      );
+                    })()}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <div className="h-1.5 w-20 rounded-full overflow-hidden" style={{ background: 'var(--forest-mid)' }}>

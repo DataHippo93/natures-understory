@@ -284,6 +284,92 @@ export async function getCleanupReport(): Promise<CleanupSection[]> {
   ];
 }
 
+// ─── Monthly trend (revenue + margin month-over-month) ──────────────────────
+
+export interface MonthlySales {
+  month: string;      // 'YYYY-MM'
+  label: string;      // 'Jun 2026'
+  revenue: number;
+  profit: number;
+  marginPct: number;
+  lossDollars: number;     // produce/BB loss booked that month (from loss sheet sync)
+  marginPctWithLoss: number;
+}
+
+/** Revenue + blended margin by calendar month for the last N months,
+ *  optionally scoped to one department. Includes loss-adjusted margin when
+ *  loss data is available (currently Produce). */
+export async function getMonthlySales(
+  months = 12,
+  department: string | null = null
+): Promise<MonthlySales[]> {
+  const n = Math.max(1, Math.min(36, months));
+  const deptJoin = `LEFT JOIN thrive_product_catalog c ON c.thrive_variant_id = s.variant_id`;
+  const deptClause = department
+    ? `AND COALESCE(c.department,'Uncategorized') = '${department.replace(/'/g, "''")}'`
+    : '';
+
+  const rows = await reportQuery<{
+    month: string; revenue_cents: number; profit_cents: number;
+  }>(`
+    SELECT to_char(date_trunc('month', s.sale_date), 'YYYY-MM') AS month,
+           SUM(s.revenue_cents)::bigint AS revenue_cents,
+           SUM(s.profit_cents)::bigint  AS profit_cents
+    FROM thrive_sales_history s
+    ${deptJoin}
+    WHERE s.sale_date >= (date_trunc('month', current_date) - interval '${n - 1} months')
+      ${deptClause}
+    GROUP BY 1
+    ORDER BY 1
+  `);
+
+  // Loss dollars per month come from the produce_loss view (sheet-synced);
+  // fall back to 0 when unavailable so the chart still renders.
+  let lossByMonth: Record<string, number> = {};
+  try {
+    const lr = await reportQuery<{ month: string; loss_cents: number }>(`
+      SELECT to_char(date_trunc('month', pulled_date), 'YYYY-MM') AS month,
+             SUM(inventory_adjustment_cents)::bigint AS loss_cents
+      FROM produce_loss_monthly
+      WHERE pulled_date >= (date_trunc('month', current_date) - interval '${n - 1} months')
+      GROUP BY 1
+    `);
+    lossByMonth = Object.fromEntries(lr.map((r) => [r.month, (r.loss_cents ?? 0) / 100]));
+  } catch {
+    lossByMonth = {};
+  }
+
+  return rows.map((r) => {
+    const revenue = (r.revenue_cents ?? 0) / 100;
+    const profit = (r.profit_cents ?? 0) / 100;
+    const loss = (department === null || department === 'Produce') ? (lossByMonth[r.month] ?? 0) : 0;
+    const [y, m] = r.month.split('-').map(Number);
+    return {
+      month: r.month,
+      label: new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+      revenue,
+      profit,
+      marginPct: revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : 0,
+      lossDollars: loss,
+      marginPctWithLoss: revenue > 0 ? Math.round(((profit - loss) / revenue) * 1000) / 10 : 0,
+    };
+  });
+}
+
+/** Loss dollars per department within a window (from loss_ledger). */
+export async function getDepartmentLoss(win: { start: string; end: string }): Promise<Record<string, number>> {
+  const start = assertDate(win.start);
+  const end = assertDate(win.end);
+  const rows = await reportQuery<{ department: string; loss_cents: number }>(`
+    SELECT COALESCE(department, CASE WHEN is_produce THEN 'Produce' ELSE 'Uncategorized' END) AS department,
+           SUM(total_cents)::bigint AS loss_cents
+    FROM loss_ledger
+    WHERE pulled_date >= '${start}' AND pulled_date <= '${end}'
+    GROUP BY 1
+  `);
+  return Object.fromEntries(rows.map((r) => [r.department, (r.loss_cents ?? 0) / 100]));
+}
+
 /** Most recent sale_date in the warehouse — drives the "data through" badge. */
 export async function getLatestSaleDate(): Promise<string | null> {
   const rows = await reportQuery<{ d: string | null }>(
