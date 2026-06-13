@@ -356,6 +356,56 @@ export async function getMonthlySales(
   });
 }
 
+// ─── Produce price optimization ──────────────────────────────────────────────
+
+export interface ProducePrice {
+  variantId: string;
+  itemName: string;
+  unit: string;
+  currentPrice: number;
+  cost: number;
+  currentMargin: number;
+  elasticity: number;
+  elasticitySource: string;
+  optimalPrice: number;
+  optimalMargin: number;
+  estUnitChangePct: number;
+  estProfitChangePct: number;
+  recommendation: string;
+  confidence: string;
+  rationale: string;
+  daysWithSales: number;
+  distinctPrices: number;
+  totalUnits90d: number;
+}
+
+export async function getProducePricing(): Promise<ProducePrice[]> {
+  const rows = await reportQuery<Record<string, unknown>>(`
+    SELECT * FROM produce_pricing
+    ORDER BY CASE recommendation WHEN 'raise' THEN 0 WHEN 'lower' THEN 1 ELSE 2 END,
+             abs(optimal_price - current_price) DESC`);
+  return rows.map((r) => ({
+    variantId: String(r.variant_id),
+    itemName: String(r.item_name),
+    unit: String(r.unit ?? 'ea'),
+    currentPrice: Number(r.current_price ?? 0),
+    cost: Number(r.cost ?? 0),
+    currentMargin: Number(r.current_margin ?? 0),
+    elasticity: Number(r.elasticity ?? 0),
+    elasticitySource: String(r.elasticity_source ?? 'benchmark'),
+    optimalPrice: Number(r.optimal_price ?? 0),
+    optimalMargin: Number(r.optimal_margin ?? 0),
+    estUnitChangePct: Number(r.est_unit_change_pct ?? 0),
+    estProfitChangePct: Number(r.est_profit_change_pct ?? 0),
+    recommendation: String(r.recommendation ?? 'hold'),
+    confidence: String(r.confidence ?? 'low'),
+    rationale: String(r.rationale ?? ''),
+    daysWithSales: Number(r.days_with_sales ?? 0),
+    distinctPrices: Number(r.distinct_prices ?? 0),
+    totalUnits90d: Number(r.total_units_90d ?? 0),
+  }));
+}
+
 /** Loss dollars per department within a window (from loss_ledger). */
 export async function getDepartmentLoss(win: { start: string; end: string }): Promise<Record<string, number>> {
   const start = assertDate(win.start);
