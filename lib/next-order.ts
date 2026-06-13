@@ -124,7 +124,7 @@ interface SalesAggRow {
 async function rpcQuery<T = unknown>(sql: string): Promise<T[]> {
   const admin = createAdminClient();
   if (!admin) return [];
-  const { data, error } = await admin.rpc('run_report_query', { query: sql });
+  const { data, error } = await admin.rpc('run_report_query', { query_sql: sql });
   if (error) throw new Error(`run_report_query: ${error.message}`);
   return (data as T[]) ?? [];
 }
@@ -194,9 +194,15 @@ export async function evaluateNextProduceOrder(): Promise<NextOrderEvaluation> {
   const itemIds = catalog.map((c) => `'${c.thrive_item_id.replace(/'/g, "''")}'`).slice(0, 5000);
   const inventory = itemIds.length
     ? await rpcQuery<InventoryRow>(`
-        SELECT thrive_item_id, item_name, qty_on_hand, snapshot_ts, last_counted_at, confidence
-        FROM thrive_inventory_latest
-        WHERE thrive_item_id IN (${itemIds.join(',')})
+        SELECT c.thrive_item_id, l.item_name, l.qty_on_hand, l.snapshot_ts,
+               l.last_counted_at, l.confidence
+        FROM (VALUES ${itemIds.map((id) => `(${id})`).join(',')}) c(thrive_item_id)
+        CROSS JOIN LATERAL (
+          SELECT item_name, qty_on_hand, snapshot_ts, last_counted_at, confidence
+          FROM thrive_inventory_history h
+          WHERE h.thrive_item_id = c.thrive_item_id
+          ORDER BY snapshot_ts DESC LIMIT 1
+        ) l
       `)
     : [];
 

@@ -39,7 +39,7 @@ export interface StockTakeResult {
 async function rpcQuery<T = unknown>(sql: string): Promise<T[]> {
   const admin = createAdminClient();
   if (!admin) return [];
-  const { data, error } = await admin.rpc('run_report_query', { query: sql });
+  const { data, error } = await admin.rpc('run_report_query', { query_sql: sql });
   if (error) throw new Error(`run_report_query: ${error.message}`);
   return (data as T[]) ?? [];
 }
@@ -77,7 +77,12 @@ export async function generateStockTake(opts: { category: string; limit?: number
           AND h.qty_on_hand IS NOT NULL
         ORDER BY h.snapshot_ts ASC LIMIT 1) AS qty_at_last_count
     FROM thrive_product_catalog c
-    LEFT JOIN thrive_inventory_latest inv ON inv.thrive_item_id = c.thrive_item_id
+    LEFT JOIN LATERAL (
+      SELECT qty_on_hand, last_counted_at
+      FROM thrive_inventory_history h
+      WHERE h.thrive_item_id = c.thrive_item_id
+      ORDER BY snapshot_ts DESC LIMIT 1
+    ) inv ON true
     WHERE c.active = true
       AND c.department = '${category.replace(/'/g, "''")}'
   `;
@@ -90,9 +95,19 @@ export async function generateStockTake(opts: { category: string; limit?: number
   // this in one query keyed by item_id, then look up in code.
   // Default the "since" cutoff to last_counted_at OR (now - 30 days) for items never counted.
   const salesSql = `
+    WITH latest AS (
+      SELECT c.thrive_item_id, l.last_counted_at
+      FROM (SELECT DISTINCT thrive_item_id FROM thrive_product_catalog
+            WHERE thrive_item_id IS NOT NULL) c
+      CROSS JOIN LATERAL (
+        SELECT last_counted_at FROM thrive_inventory_history h
+        WHERE h.thrive_item_id = c.thrive_item_id
+        ORDER BY snapshot_ts DESC LIMIT 1
+      ) l
+    )
     SELECT s.item_id, SUM(s.units)::numeric AS total_units
     FROM thrive_sales_history s
-    LEFT JOIN thrive_inventory_latest inv ON inv.thrive_item_id = s.item_id
+    LEFT JOIN latest inv ON inv.thrive_item_id = s.item_id
     WHERE s.sale_date >= COALESCE(inv.last_counted_at::date, CURRENT_DATE - INTERVAL '30 days')
     GROUP BY s.item_id
   `;
