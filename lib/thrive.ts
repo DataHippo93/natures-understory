@@ -356,6 +356,39 @@ export async function getMonthlySales(
   });
 }
 
+// ─── EBT mis-sale flags (admin only) ─────────────────────────────────────────
+
+export interface EbtFlag {
+  orderId: string;
+  orderDate: string | null;
+  cashierName: string | null;
+  itemName: string | null;
+  upc: string | null;
+  amount: number;
+  aiClass: string | null;
+  aiConfidence: number;
+}
+
+export async function getEbtFlags(days = 30): Promise<EbtFlag[]> {
+  const n = Math.max(1, Math.min(120, days));
+  const rows = await reportQuery<Record<string, unknown>>(`
+    SELECT order_id, order_date::text AS order_date, cashier_name, item_name,
+           upc, amount_cents, ai_class, ai_confidence
+    FROM ebt_sale_flags
+    WHERE order_date >= current_date - ${n}
+    ORDER BY order_date DESC, cashier_name`);
+  return rows.map((r) => ({
+    orderId: String(r.order_id),
+    orderDate: r.order_date ? String(r.order_date) : null,
+    cashierName: r.cashier_name ? String(r.cashier_name) : null,
+    itemName: r.item_name ? String(r.item_name) : null,
+    upc: r.upc ? String(r.upc) : null,
+    amount: Number(r.amount_cents ?? 0) / 100,
+    aiClass: r.ai_class ? String(r.ai_class) : null,
+    aiConfidence: Number(r.ai_confidence ?? 0),
+  }));
+}
+
 // ─── Produce price optimization ──────────────────────────────────────────────
 
 export interface ProducePrice {
