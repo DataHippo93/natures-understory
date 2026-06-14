@@ -90,6 +90,10 @@ export interface NextOrderEvaluation {
     skip_count: number;
     review_count: number;
   };
+  /** Set when the evaluation degraded due to an upstream error
+   *  (e.g. missing table, broken RPC). Page renders an empty state +
+   *  a UI-side warning chip instead of crashing. */
+  error?: string;
 }
 
 const TZ = 'America/New_York';
@@ -175,12 +179,12 @@ interface SalesAggRow {
 async function rpc<T = unknown>(sql: string): Promise<T[]> {
   const admin = createAdminClient();
   if (!admin) return [];
-  const { data, error } = await admin.rpc('run_report_query', { query: sql });
+  const { data, error } = await admin.rpc('run_report_query', { query_sql: sql });
   if (error) throw new Error(`run_report_query: ${error.message}`);
   return (data as T[]) ?? [];
 }
 
-export async function evaluateNextProduceOrder(opts: { notes?: string } = {}): Promise<NextOrderEvaluation> {
+async function _evaluateNextProduceOrderImpl(opts: { notes?: string } = {}): Promise<NextOrderEvaluation> {
   const today = todayNY();
   const evaluatedAt = new Date().toISOString();
 
@@ -443,4 +447,30 @@ export async function evaluateNextProduceOrder(opts: { notes?: string } = {}): P
     parsed_notes: parsedNotes,
     totals,
   };
+}
+
+
+/**
+ * Safety wrapper: any single-table failure degrades to an empty evaluation
+ * with the error captured in the returned `error` field instead of
+ * crashing the Server Component. This keeps the page rendering even when
+ * loss_ledger / alberts_price_entries / inventory_adjustment_queue
+ * aren't populated yet.
+ */
+export async function evaluateNextProduceOrder(opts: { notes?: string } = {}): Promise<NextOrderEvaluation & { error?: string }> {
+  try {
+    return await _evaluateNextProduceOrderImpl(opts);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Log so it shows up in Vercel function logs alongside the digest
+    console.error('[next-produce] evaluation failed:', msg);
+    return {
+      evaluated_at: new Date().toISOString(),
+      inventory_snapshot_ts: null,
+      rows: [],
+      parsed_notes: [],
+      totals: { items: 0, suggested_cases_total: 0, suggested_dollars_total: 0, buy_count: 0, skip_count: 0, review_count: 0 },
+      error: msg,
+    };
+  }
 }

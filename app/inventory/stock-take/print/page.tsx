@@ -92,7 +92,7 @@ export default async function PrintPage({ searchParams }: { searchParams: Promis
                    WHERE item_id IN (${inList})
                      AND sale_date >= CURRENT_DATE - INTERVAL '30 days'
                    GROUP BY item_id`;
-      const { data } = await admin.rpc('run_report_query', { query: sql });
+      const { data } = await admin.rpc('run_report_query', { query_sql: sql });
       for (const r of ((data ?? []) as Array<{ item_id: string; u: number | string }>)) {
         sold30d.set(r.item_id, Number(r.u ?? 0));
       }
