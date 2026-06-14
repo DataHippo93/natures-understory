@@ -58,7 +58,7 @@ interface ItemRow {
 
 interface SalesRow { item_id: string; total_units: number | string }
 
-export async function generateStockTake(opts: { category: string; limit?: number }): Promise<StockTakeResult> {
+export async function generateStockTake(opts: { category: string; limit?: number; vendorIds?: string[]; activeWindowDays?: number }): Promise<StockTakeResult> {
   const category = opts.category;
   const limit = opts.limit ?? 50;
 
@@ -85,10 +85,27 @@ export async function generateStockTake(opts: { category: string; limit?: number
     ) inv ON true
     WHERE c.active = true
       AND c.department = '${category.replace(/'/g, "''")}'
+      ${opts.vendorIds && opts.vendorIds.length > 0
+        ? `AND (c.primary_vendor_id IS NULL OR c.primary_vendor_id IN (${opts.vendorIds.map((v) => `'${v.replace(/'/g, "''")}'`).join(',')}))`
+        : ''}
   `;
   const catalog = await rpcQuery<ItemRow>(catSql);
   if (catalog.length === 0) {
     return { generated_at: new Date().toISOString(), category, total_candidates: 0, rows: [] };
+  }
+
+  // Optional activity filter: only items that moved in the last N days.
+  // Use a separate query so the IN-list size stays bounded.
+  const activityFilter = new Set<string>();
+  let activityFilterEnabled = false;
+  if (opts.activeWindowDays && opts.activeWindowDays > 0) {
+    activityFilterEnabled = true;
+    const days = Math.max(1, Math.min(365, Math.floor(opts.activeWindowDays)));
+    const activeRows = await rpcQuery<{ item_id: string }>(
+      `SELECT DISTINCT item_id FROM thrive_sales_history
+        WHERE sale_date >= CURRENT_DATE - INTERVAL '${days} days'`
+    );
+    for (const r of activeRows) activityFilter.add(r.item_id);
   }
 
   // For each item, find sum of sales since last_counted_at. We bucket
@@ -169,7 +186,10 @@ export async function generateStockTake(opts: { category: string; limit?: number
     };
   });
 
-  rows.sort((a, b) => {
+  const filteredRows = activityFilterEnabled
+    ? rows.filter((r) => activityFilter.has(r.thrive_item_id))
+    : rows;
+  filteredRows.sort((a, b) => {
     if (b.priority_score !== a.priority_score) return b.priority_score - a.priority_score;
     // tiebreak alphabetical
     return a.name.localeCompare(b.name);
@@ -178,7 +198,7 @@ export async function generateStockTake(opts: { category: string; limit?: number
   return {
     generated_at: new Date().toISOString(),
     category,
-    total_candidates: rows.length,
-    rows: rows.slice(0, limit),
+    total_candidates: filteredRows.length,
+    rows: filteredRows.slice(0, limit),
   };
 }
