@@ -1,14 +1,24 @@
-// Evaluates "what would we order right now" for produce.
+// Evaluates "what would we order right now" for Produce — v1 with
+// loss-aware velocity + profit-center verdict + notes-driven overrides.
 //
-// Joins thrive_inventory_latest × thrive_sales_history × thrive_product_catalog
-// to compute per-SKU current on-hand, 30-day velocity, days-of-supply,
-// and a suggested order quantity for the next vendor truck.
+// Pipeline:
+//   1. thrive_product_catalog (Produce, active)            -> SKU rows
+//   2. thrive_inventory_latest                              -> current_on_hand
+//   3. thrive_sales_history (30d + 7d windows)              -> raw velocity
+//   4. loss_ledger (fuzzy name-match)                       -> loss_units_30d
+//   5. clean velocity = raw - loss                          -> velocity_per_day_clean
+//   6. produce_vendors (Albert's next truck)                -> target_dos
+//   7. profit-center math (unit_cost, sticky_retail,        -> verdict
+//      loss_rate_30d, expected_margin_pct, core-staple)
+//   8. notes parser (apply add/skip/s/o overrides)          -> NextOrderRow.override_*
 //
-// The vendor schedule is read from public.produce_vendors (Feature 2).
-// Vendors without a row default to a hardcoded fallback so the page
-// works even before the produce_vendors seed lands.
+// All "clean" math excludes loss-tally units. Raw exposes the noise for
+// transparency; suggested_cases is computed against clean velocity.
 
 import { createAdminClient } from './supabase/admin';
+import { loadLossByItem30d } from './loss-match';
+import { isCoreStaple } from './core-staples';
+import { parseNotes, type ParsedAction, type Catalog as ParserCatalog } from './notes-parser';
 
 export interface NextOrderRow {
   thrive_item_id: string;
@@ -16,63 +26,101 @@ export interface NextOrderRow {
   sku: string | null;
   name: string;
   department: string | null;
+
+  // Inventory
   current_on_hand: number | null;
-  velocity_per_day: number;
-  velocity_per_week: number;
-  days_of_supply: number | null;   // null if velocity 0
+  inventory_snapshot_ts: string | null;
+
+  // Velocity (raw + clean)
+  velocity_per_day_raw: number;
+  velocity_per_day_clean: number;
+  velocity_per_week_clean: number;
+  velocity_per_day_7d_clean: number;
+  units_sold_30d_raw: number;
+  units_lost_30d: number;
+  velocity_signal_days: number;       // sale-days observed in 30d (data confidence)
+
+  // Days-of-supply
+  days_of_supply: number | null;
+
+  // Vendor + truck
   vendor_id: string | null;
   vendor_name: string | null;
   next_truck_date: string | null;
   days_until_truck: number | null;
+  target_dos: number | null;          // truck cadence × 1.5 buffer
+
+  // Pack + suggestion
   units_per_case: number | null;
   suggested_units: number;
   suggested_cases: number;
-  suggested_price_dollars: number | null;
+
+  // Profit-center
+  sticky_retail_dollars: number | null;
+  unit_cost_dollars: number | null;
+  loss_rate_30d: number;              // 0..1
+  expected_margin_pct: number | null;
+  is_core_staple: boolean;
+  verdict: 'BUY' | 'SKIP' | 'REVIEW';
+  verdict_reason: string;
+
+  // UI
   confidence: number;
   rationale: string[];
   flags: string[];
+
+  // Overrides (from notes parser; null if no override)
+  override_cases: number | null;
+  override_reason: string | null;
+  override_kind: 'add' | 'skip' | 'so' | null;
+  override_so_customer: string | null;
+  override_note: string | null;
 }
 
 export interface NextOrderEvaluation {
   evaluated_at: string;
   inventory_snapshot_ts: string | null;
   rows: NextOrderRow[];
+  parsed_notes: ParsedAction[];
+  totals: {
+    items: number;
+    suggested_cases_total: number;
+    suggested_dollars_total: number;
+    buy_count: number;
+    skip_count: number;
+    review_count: number;
+  };
 }
 
-const BUFFER_DAYS = 1;
 const TZ = 'America/New_York';
+const PROFIT_CENTER_MIN_MARGIN = 0.40;
 
-// Hardcoded vendor schedule fallback for vendors not yet in produce_vendors.
-// Lowercase weekday names. Matches the seed migration but works without it.
+// Vendor schedule fallback (used when produce_vendors row is missing).
 const FALLBACK_SCHEDULE: Record<string, string[]> = {
   alberts:        ['monday', 'thursday'],
-  'albert\'s':    ['monday', 'thursday'],
+  "albert's":     ['monday', 'thursday'],
   kents:          ['tuesday'],
-  'kent\'s':      ['tuesday'],
+  "kent's":       ['tuesday'],
   birdsfoot:      ['thursday'],
-  'martin\'s farmstand': [],
-  'house of greens': ['wednesday'],
-  'canton apples': [],
-  'ferris ridge':  [],
-  'brandy-view':   ['sunday'],
+  'brandy-view':  ['sunday'],
   'deep root farm':['thursday'],
-  'holton farms':  ['wednesday'],
+  'holton farms': ['wednesday'],
+  'house of greens':['wednesday'],
 };
 
+const TZ_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: TZ });
 function todayNY(): string {
+  // Use 'sv-SE' formatter trick? simpler: en-CA gives YYYY-MM-DD.
   return new Date().toLocaleDateString('en-CA', { timeZone: TZ });
 }
-
 function weekdayOf(dateStr: string): string {
   return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', timeZone: TZ }).toLowerCase();
 }
-
 function addDays(dateStr: string, n: number): string {
   const d = new Date(dateStr + 'T12:00:00');
   d.setDate(d.getDate() + n);
   return d.toLocaleDateString('en-CA');
 }
-
 function nextOrderDate(orderDays: string[] | null | undefined, fromISO?: string): { date: string; daysOut: number } | null {
   if (!orderDays || orderDays.length === 0) return null;
   const start = fromISO ?? todayNY();
@@ -84,13 +132,14 @@ function nextOrderDate(orderDays: string[] | null | undefined, fromISO?: string)
   return null;
 }
 
-interface InventoryRow {
-  thrive_item_id: string;
-  item_name: string;
-  qty_on_hand: number | string | null;
-  snapshot_ts: string;
-  last_counted_at: string | null;
-  confidence: number | string | null;
+/** Target days-of-supply: 1.5× the gap between THIS truck and the NEXT. */
+function targetDosFor(orderDays: string[] | null | undefined, fromISO?: string): { trucks: [string, string] | null; targetDos: number | null } {
+  const t1 = nextOrderDate(orderDays, fromISO);
+  if (!t1) return { trucks: null, targetDos: null };
+  const t2 = nextOrderDate(orderDays, addDays(t1.date, 1));
+  if (!t2) return { trucks: [t1.date, ''], targetDos: 4.5 };
+  const gap = Math.max(1, Math.round((new Date(t2.date + 'T12:00:00').getTime() - new Date(t1.date + 'T12:00:00').getTime()) / 86_400_000));
+  return { trucks: [t1.date, t2.date], targetDos: Math.round((gap * 1.5) * 10) / 10 };
 }
 
 interface CatalogRow {
@@ -101,211 +150,297 @@ interface CatalogRow {
   department: string | null;
   units_per_case: number | string | null;
   price_cents: number | null;
+  default_cost_cents: number | null;
   primary_vendor_id: string | null;
-  active: boolean;
 }
-
+interface InventoryRow {
+  thrive_item_id: string;
+  qty_on_hand: number | string | null;
+  snapshot_ts: string;
+  last_counted_at: string | null;
+  confidence: number | string | null;
+}
 interface VendorMapRow {
   thrive_vendor_id: string | null;
   display_name: string;
   order_days: string[] | null;
 }
-
 interface SalesAggRow {
   item_id: string;
-  total_units: number | string;
-  days_with_sales: number;
+  units_30d: number | string;
+  units_7d: number | string;
+  days_30d: number;
 }
 
-/**
- * Run a Supabase RPC `run_report_query` returning an array of rows.
- * Falls back to an empty array on missing admin client.
- */
-async function rpcQuery<T = unknown>(sql: string): Promise<T[]> {
+async function rpc<T = unknown>(sql: string): Promise<T[]> {
   const admin = createAdminClient();
   if (!admin) return [];
-  const { data, error } = await admin.rpc('run_report_query', { query_sql: sql });
+  const { data, error } = await admin.rpc('run_report_query', { query: sql });
   if (error) throw new Error(`run_report_query: ${error.message}`);
   return (data as T[]) ?? [];
 }
 
-/** Compute confidence per SKU. */
-function computeConfidence(opts: {
-  inventoryAgeHrs: number | null;
-  hasInventory: boolean;
-  salesDays: number;
-  hasVendor: boolean;
-}): number {
-  let c = 1.0;
-  // Inventory freshness: 1.0 at <24h, decays linearly to 0.3 at 7d
-  if (!opts.hasInventory) c *= 0.3;
-  else if (opts.inventoryAgeHrs !== null) {
-    const dayFactor = Math.max(0.3, 1.0 - opts.inventoryAgeHrs / (24 * 14));
-    c *= dayFactor;
-  }
-  // Velocity sample size
-  if (opts.salesDays >= 14) c *= 1.0;
-  else c *= Math.max(0.4, opts.salesDays / 14);
-  // Vendor mapping
-  if (!opts.hasVendor) c *= 0.6;
-  return Math.round(c * 100) / 100;
-}
-
-export async function evaluateNextProduceOrder(): Promise<NextOrderEvaluation> {
+export async function evaluateNextProduceOrder(opts: { notes?: string } = {}): Promise<NextOrderEvaluation> {
   const today = todayNY();
   const evaluatedAt = new Date().toISOString();
 
-  // Vendor schedule from DB (with fallback)
-  let dbVendors: VendorMapRow[] = [];
-  try {
-    dbVendors = await rpcQuery<VendorMapRow>(`
-      SELECT thrive_vendor_id, display_name, order_days
-      FROM produce_vendors WHERE active = true
-    `);
-  } catch {
-    /* table may not exist yet; fall through to hardcoded */
-  }
-
-  // 30-day sales velocity by item (variant rolls up to item)
-  const salesRows = await rpcQuery<SalesAggRow>(`
-    SELECT item_id, SUM(units)::numeric AS total_units, COUNT(DISTINCT sale_date)::int AS days_with_sales
-    FROM thrive_sales_history
-    WHERE sale_date >= (CURRENT_DATE - INTERVAL '30 days')
-    GROUP BY item_id
-  `);
-  const salesByItem = new Map<string, { units: number; days: number }>();
-  for (const r of salesRows) {
-    const units = Number(r.total_units ?? 0);
-    salesByItem.set(r.item_id, { units, days: Number(r.days_with_sales ?? 0) });
-  }
-
-  // Produce catalog (filter to active Produce dept items)
-  const catalog = await rpcQuery<CatalogRow>(`
+  // 1. Catalog (active Produce)
+  const catalog = await rpc<CatalogRow>(`
     SELECT thrive_item_id, thrive_variant_id, sku, name, department,
-           units_per_case, price_cents, primary_vendor_id, active
+           units_per_case, price_cents, default_cost_cents, primary_vendor_id
     FROM thrive_product_catalog
     WHERE active = true AND department = 'Produce'
   `);
   if (catalog.length === 0) {
-    return { evaluated_at: evaluatedAt, inventory_snapshot_ts: null, rows: [] };
+    return { evaluated_at: evaluatedAt, inventory_snapshot_ts: null, rows: [], parsed_notes: [], totals: { items: 0, suggested_cases_total: 0, suggested_dollars_total: 0, buy_count: 0, skip_count: 0, review_count: 0 } };
   }
 
-  // Latest inventory snapshot for these items
-  const itemIds = catalog.map((c) => `'${c.thrive_item_id.replace(/'/g, "''")}'`).slice(0, 5000);
-  const inventory = itemIds.length
-    ? await rpcQuery<InventoryRow>(`
-        SELECT c.thrive_item_id, l.item_name, l.qty_on_hand, l.snapshot_ts,
-               l.last_counted_at, l.confidence
-        FROM (VALUES ${itemIds.map((id) => `(${id})`).join(',')}) c(thrive_item_id)
-        CROSS JOIN LATERAL (
-          SELECT item_name, qty_on_hand, snapshot_ts, last_counted_at, confidence
-          FROM thrive_inventory_history h
-          WHERE h.thrive_item_id = c.thrive_item_id
-          ORDER BY snapshot_ts DESC LIMIT 1
-        ) l
-      `)
-    : [];
-
+  // 2. Inventory (latest per item)
+  const itemIds = catalog.map((c) => `'${c.thrive_item_id.replace(/'/g, "''")}'`);
+  const inventory = await rpc<InventoryRow>(`
+    SELECT thrive_item_id, qty_on_hand, snapshot_ts, last_counted_at, confidence
+    FROM thrive_inventory_latest
+    WHERE thrive_item_id IN (${itemIds.join(',')})
+  `);
   const invByItem = new Map<string, InventoryRow>();
   let latestSnapshotTs: string | null = null;
-  for (const row of inventory) {
-    invByItem.set(row.thrive_item_id, row);
-    if (!latestSnapshotTs || row.snapshot_ts > latestSnapshotTs) latestSnapshotTs = row.snapshot_ts;
+  for (const r of inventory) {
+    invByItem.set(r.thrive_item_id, r);
+    if (!latestSnapshotTs || r.snapshot_ts > latestSnapshotTs) latestSnapshotTs = r.snapshot_ts;
   }
 
-  // Pick a vendor schedule for each item.
-  // Strategy: catalog.primary_vendor_id -> match against produce_vendors.thrive_vendor_id.
-  // Fall back to FALLBACK_SCHEDULE keyed on the lowercase display name if no DB row.
+  // 3. Sales velocity (30d + 7d)
+  const sales = await rpc<SalesAggRow>(`
+    SELECT item_id,
+      SUM(units)::numeric AS units_30d,
+      SUM(CASE WHEN sale_date >= CURRENT_DATE - INTERVAL '7 days' THEN units ELSE 0 END)::numeric AS units_7d,
+      COUNT(DISTINCT sale_date)::int AS days_30d
+    FROM thrive_sales_history
+    WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
+      AND item_id IN (${itemIds.join(',')})
+    GROUP BY item_id
+  `);
+  const salesByItem = new Map<string, { units_30d: number; units_7d: number; days_30d: number }>();
+  for (const r of sales) {
+    salesByItem.set(r.item_id, {
+      units_30d: Number(r.units_30d ?? 0),
+      units_7d: Number(r.units_7d ?? 0),
+      days_30d: Number(r.days_30d ?? 0),
+    });
+  }
+
+  // 4. Loss exclusion (fuzzy name match)
+  const lossByItem = await loadLossByItem30d(catalog.map((c) => ({ thrive_item_id: c.thrive_item_id, name: c.name })));
+
+  // 5. Vendor map
+  let vendors: VendorMapRow[] = [];
+  try {
+    vendors = await rpc<VendorMapRow>(`SELECT thrive_vendor_id, display_name, order_days FROM produce_vendors WHERE active = true`);
+  } catch { /* table may not exist on first deploy */ }
   const vendorById = new Map<string, VendorMapRow>();
-  for (const v of dbVendors) {
-    if (v.thrive_vendor_id) vendorById.set(v.thrive_vendor_id, v);
+  for (const v of vendors) if (v.thrive_vendor_id) vendorById.set(v.thrive_vendor_id, v);
+
+  // 6. Build rows
+  const parserCatalog: ParserCatalog[] = catalog.map((c) => ({ thrive_item_id: c.thrive_item_id, name: c.name }));
+  const parsedNotes = opts.notes ? parseNotes(opts.notes, parserCatalog) : [];
+
+  // Map parsed actions by item for quick row-side lookup
+  const overrideByItem = new Map<string, ParsedAction[]>();
+  for (const a of parsedNotes) {
+    if (a.kind === 'noop') continue;
+    const arr = overrideByItem.get(a.itemId) ?? [];
+    arr.push(a);
+    overrideByItem.set(a.itemId, arr);
   }
 
-  const out: NextOrderRow[] = [];
-
+  const rows: NextOrderRow[] = [];
   for (const c of catalog) {
     const inv = invByItem.get(c.thrive_item_id);
     const qty = inv?.qty_on_hand != null ? Number(inv.qty_on_hand) : null;
-    const sales = salesByItem.get(c.thrive_item_id);
-    const velocityPerDay = (sales?.units ?? 0) / 30;
-    const salesDays = sales?.days ?? 0;
-    const daysOfSupply = velocityPerDay > 0 && qty != null ? qty / velocityPerDay : null;
+    const sale = salesByItem.get(c.thrive_item_id) ?? { units_30d: 0, units_7d: 0, days_30d: 0 };
+    const lossUnits = lossByItem.get(c.thrive_item_id) ?? 0;
 
-    // Vendor + schedule resolution
+    const units_sold_30d_raw = sale.units_30d;
+    const units_sold_30d_clean = Math.max(0, units_sold_30d_raw - lossUnits);
+    const velocity_per_day_raw = units_sold_30d_raw / 30;
+    const velocity_per_day_clean = units_sold_30d_clean / 30;
+    const velocity_per_day_7d_clean = Math.max(0, sale.units_7d - (lossUnits * 7 / 30)) / 7;
+
+    const dos = (velocity_per_day_clean > 0 && qty != null) ? qty / velocity_per_day_clean : null;
+
+    // Vendor
     let vendor: VendorMapRow | null = null;
     if (c.primary_vendor_id) vendor = vendorById.get(c.primary_vendor_id) ?? null;
-    let scheduleSource: 'db' | 'fallback' | 'none' = vendor ? 'db' : 'none';
     let orderDays: string[] = vendor?.order_days ?? [];
-    if (!vendor && c.primary_vendor_id) {
-      // Match Albert's specifically — most produce flows through them
-      orderDays = FALLBACK_SCHEDULE['alberts'];
-      scheduleSource = 'fallback';
-    }
-    const truck = nextOrderDate(orderDays, today);
+    let scheduleSource: 'db' | 'fallback' | 'none' = vendor ? 'db' : 'none';
+    if (!vendor) { orderDays = FALLBACK_SCHEDULE['alberts']; scheduleSource = 'fallback'; }
+    const { trucks, targetDos } = targetDosFor(orderDays, today);
+    const next_truck_date = trucks ? trucks[0] : null;
+    const days_until_truck = next_truck_date ? Math.round((new Date(next_truck_date + 'T12:00:00').getTime() - new Date(today + 'T12:00:00').getTime()) / 86_400_000) : null;
 
-    // Suggested order quantity
+    // Suggested order
     const unitsPerCase = c.units_per_case != null ? Number(c.units_per_case) : null;
-    const daysUntilTruck = truck?.daysOut ?? null;
-    let suggestedUnits = 0;
-    if (truck && qty != null && velocityPerDay > 0) {
-      const horizon = truck.daysOut + BUFFER_DAYS;
-      suggestedUnits = Math.max(0, horizon * velocityPerDay - qty);
+    let suggested_units = 0;
+    if (targetDos != null && qty != null && velocity_per_day_clean > 0) {
+      suggested_units = Math.max(0, targetDos * velocity_per_day_clean - qty);
     }
-    const suggestedCases = unitsPerCase && unitsPerCase > 0 ? Math.ceil(suggestedUnits / unitsPerCase) : 0;
+    let suggested_cases = unitsPerCase && unitsPerCase > 0 ? Math.ceil(suggested_units / unitsPerCase) : 0;
 
-    const inventoryAgeHrs = inv ? (Date.now() - Date.parse(inv.snapshot_ts)) / 3_600_000 : null;
-    const conf = computeConfidence({
-      inventoryAgeHrs,
-      hasInventory: qty != null,
-      salesDays,
-      hasVendor: scheduleSource !== 'none',
-    });
+    // Profit-center
+    const sticky_retail_dollars = c.price_cents != null && c.price_cents > 0 ? c.price_cents / 100 : null;
+    const unit_cost_dollars = c.default_cost_cents != null && c.default_cost_cents > 0 && unitsPerCase && unitsPerCase > 0
+      ? c.default_cost_cents / 100 / unitsPerCase
+      : (c.default_cost_cents != null && c.default_cost_cents > 0 ? c.default_cost_cents / 100 : null);
+    // loss_rate = loss/(loss + sold_clean) — fraction of throughput that becomes loss
+    const throughput_30d = units_sold_30d_clean + lossUnits;
+    const loss_rate_30d = throughput_30d > 0 ? lossUnits / throughput_30d : 0;
+    const expected_margin_pct = (sticky_retail_dollars != null && unit_cost_dollars != null && sticky_retail_dollars > 0)
+      ? (sticky_retail_dollars * (1 - loss_rate_30d) - unit_cost_dollars) / sticky_retail_dollars
+      : null;
+    const core_staple = isCoreStaple(c.name);
 
-    const rationale: string[] = [];
-    if (daysOfSupply != null) rationale.push(`${daysOfSupply.toFixed(1)}d supply at ${velocityPerDay.toFixed(2)} units/day`);
-    else if (qty != null) rationale.push(`${qty.toFixed(1)} on hand, no recent sales`);
-    if (truck) rationale.push(`truck ${truck.daysOut === 0 ? 'today' : `in ${truck.daysOut}d (${truck.date})`}`);
+    let verdict: 'BUY' | 'SKIP' | 'REVIEW' = 'REVIEW';
+    let verdict_reason = '';
+    if (core_staple) {
+      verdict = 'BUY';
+      verdict_reason = 'core staple — always stock';
+    } else if (expected_margin_pct == null) {
+      verdict = 'REVIEW';
+      verdict_reason = 'missing cost or retail';
+    } else if (expected_margin_pct >= PROFIT_CENTER_MIN_MARGIN) {
+      verdict = 'BUY';
+      verdict_reason = `margin ${(expected_margin_pct * 100).toFixed(0)}%`;
+    } else {
+      verdict = 'SKIP';
+      const lossPct = loss_rate_30d * 100;
+      verdict_reason = lossPct >= 15
+        ? `loss rate ${lossPct.toFixed(0)}% (margin only ${(expected_margin_pct * 100).toFixed(0)}%)`
+        : `margin too thin: ${(expected_margin_pct * 100).toFixed(0)}%`;
+    }
 
+    // Confidence
+    const invAgeHrs = inv ? (Date.now() - Date.parse(inv.snapshot_ts)) / 3_600_000 : null;
+    let conf = 1.0;
+    if (qty == null) conf *= 0.3;
+    else if (invAgeHrs != null) conf *= Math.max(0.3, 1 - invAgeHrs / (24 * 14));
+    conf *= sale.days_30d >= 14 ? 1.0 : Math.max(0.4, sale.days_30d / 14);
+    if (scheduleSource === 'fallback') conf *= 0.85;
+    conf = Math.round(conf * 100) / 100;
+
+    // Flags + rationale
     const flags: string[] = [];
     if (qty == null) flags.push('no_inventory');
     if (qty != null && qty < 0) flags.push('negative_on_hand');
-    if (salesDays < 7) flags.push('low_velocity_signal');
-    if (scheduleSource === 'none') flags.push('no_vendor_mapping');
+    if (sale.days_30d < 7) flags.push('low_velocity_signal');
+    if (lossUnits > 0 && lossUnits >= units_sold_30d_raw * 0.10) flags.push('high_loss_rate');
     if (scheduleSource === 'fallback') flags.push('vendor_mapping_fallback');
+    if (verdict === 'SKIP') flags.push('profit_center_skip');
 
-    out.push({
+    const rationale: string[] = [];
+    if (dos != null) rationale.push(`${dos.toFixed(1)}d supply at ${velocity_per_day_clean.toFixed(2)} u/d clean`);
+    if (lossUnits > 0) rationale.push(`${lossUnits.toFixed(1)} u lost in last 30d (excluded)`);
+    if (targetDos != null && next_truck_date) rationale.push(`truck ${days_until_truck === 0 ? 'today' : `in ${days_until_truck}d`}; target ${targetDos}d cover`);
+    if (verdict_reason) rationale.push(verdict_reason);
+
+    // Overrides
+    const overrides = overrideByItem.get(c.thrive_item_id) ?? [];
+    let override_cases: number | null = null;
+    let override_reason: string | null = null;
+    let override_kind: 'add' | 'skip' | 'so' | null = null;
+    let override_so_customer: string | null = null;
+    let override_note: string | null = null;
+    for (const a of overrides) {
+      if (a.kind === 'skip') {
+        override_cases = 0;
+        override_reason = 'skipped via notes';
+        override_kind = 'skip';
+      } else if (a.kind === 'add') {
+        const cs = a.unit === 'cases' ? a.qty : (unitsPerCase && unitsPerCase > 0 ? Math.ceil(a.qty / unitsPerCase) : a.qty);
+        override_cases = (override_cases ?? 0) + cs;
+        override_reason = (override_reason ? override_reason + '; ' : '') + `+${cs}cs via notes`;
+        override_kind = override_kind ?? 'add';
+      } else if (a.kind === 'so') {
+        const cs = a.unit === 'cases' ? a.qty : (unitsPerCase && unitsPerCase > 0 ? Math.ceil(a.qty / unitsPerCase) : a.qty);
+        override_cases = (override_cases ?? 0) + cs;
+        override_reason = (override_reason ? override_reason + '; ' : '') + `S/O ${a.customer} +${cs}cs`;
+        override_kind = 'so';
+        override_so_customer = a.customer;
+      } else if (a.kind === 'note') {
+        override_note = a.text;
+      }
+    }
+    // Final case count after overrides
+    const final_cases = override_cases != null ? override_cases : (verdict === 'SKIP' ? 0 : suggested_cases);
+
+    rows.push({
       thrive_item_id: c.thrive_item_id,
       thrive_variant_id: c.thrive_variant_id,
       sku: c.sku,
       name: c.name,
       department: c.department,
       current_on_hand: qty,
-      velocity_per_day: Math.round(velocityPerDay * 1000) / 1000,
-      velocity_per_week: Math.round(velocityPerDay * 7 * 100) / 100,
-      days_of_supply: daysOfSupply != null ? Math.round(daysOfSupply * 10) / 10 : null,
+      inventory_snapshot_ts: inv?.snapshot_ts ?? null,
+      velocity_per_day_raw: Math.round(velocity_per_day_raw * 100) / 100,
+      velocity_per_day_clean: Math.round(velocity_per_day_clean * 100) / 100,
+      velocity_per_week_clean: Math.round(velocity_per_day_clean * 7 * 10) / 10,
+      velocity_per_day_7d_clean: Math.round(velocity_per_day_7d_clean * 100) / 100,
+      units_sold_30d_raw: Math.round(units_sold_30d_raw * 10) / 10,
+      units_lost_30d: Math.round(lossUnits * 10) / 10,
+      velocity_signal_days: sale.days_30d,
+      days_of_supply: dos != null ? Math.round(dos * 10) / 10 : null,
       vendor_id: c.primary_vendor_id,
-      vendor_name: vendor?.display_name ?? null,
-      next_truck_date: truck?.date ?? null,
-      days_until_truck: daysUntilTruck,
+      vendor_name: vendor?.display_name ?? (scheduleSource === 'fallback' ? "Albert's (fallback)" : null),
+      next_truck_date,
+      days_until_truck,
+      target_dos: targetDos,
       units_per_case: unitsPerCase,
-      suggested_units: Math.round(suggestedUnits * 10) / 10,
-      suggested_cases: suggestedCases,
-      suggested_price_dollars: c.price_cents != null ? c.price_cents / 100 : null,
+      suggested_units: Math.round(suggested_units * 10) / 10,
+      suggested_cases: final_cases,
+      sticky_retail_dollars,
+      unit_cost_dollars: unit_cost_dollars != null ? Math.round(unit_cost_dollars * 100) / 100 : null,
+      loss_rate_30d: Math.round(loss_rate_30d * 1000) / 1000,
+      expected_margin_pct: expected_margin_pct != null ? Math.round(expected_margin_pct * 1000) / 1000 : null,
+      is_core_staple: core_staple,
+      verdict,
+      verdict_reason,
       confidence: conf,
       rationale,
       flags,
+      override_cases,
+      override_reason,
+      override_kind,
+      override_so_customer,
+      override_note,
     });
   }
 
-  // Sort: red (DoS < 1) > amber (1 ≤ DoS < 3) > green (else), within band by urgency
-  out.sort((a, b) => {
-    const aBand = a.days_of_supply == null ? 99 : a.days_of_supply < 1 ? 0 : a.days_of_supply < 3 ? 1 : 2;
-    const bBand = b.days_of_supply == null ? 99 : b.days_of_supply < 1 ? 0 : b.days_of_supply < 3 ? 1 : 2;
+  // Sort: BUY+suggested first (by urgency), then REVIEW, then SKIP, then no-suggest
+  rows.sort((a, b) => {
+    const aBand = a.suggested_cases > 0 ? 0 : (a.verdict === 'REVIEW' ? 1 : (a.verdict === 'SKIP' ? 2 : 3));
+    const bBand = b.suggested_cases > 0 ? 0 : (b.verdict === 'REVIEW' ? 1 : (b.verdict === 'SKIP' ? 2 : 3));
     if (aBand !== bBand) return aBand - bBand;
     const aDos = a.days_of_supply ?? 999;
     const bDos = b.days_of_supply ?? 999;
     return aDos - bDos;
   });
 
-  return { evaluated_at: evaluatedAt, inventory_snapshot_ts: latestSnapshotTs, rows: out };
+  const totals = {
+    items: rows.length,
+    suggested_cases_total: rows.reduce((s, r) => s + r.suggested_cases, 0),
+    suggested_dollars_total: rows.reduce((s, r) => {
+      if (r.suggested_cases <= 0 || !r.unit_cost_dollars || !r.units_per_case) return s;
+      return s + r.suggested_cases * r.units_per_case * r.unit_cost_dollars;
+    }, 0),
+    buy_count: rows.filter((r) => r.verdict === 'BUY').length,
+    skip_count: rows.filter((r) => r.verdict === 'SKIP').length,
+    review_count: rows.filter((r) => r.verdict === 'REVIEW').length,
+  };
+
+  return {
+    evaluated_at: evaluatedAt,
+    inventory_snapshot_ts: latestSnapshotTs,
+    rows,
+    parsed_notes: parsedNotes,
+    totals,
+  };
 }

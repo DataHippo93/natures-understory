@@ -1,4 +1,5 @@
-// GET /api/buying/produce — produce next-order evaluation.
+// GET /api/buying/produce — produce next-order evaluation (no notes).
+// POST /api/buying/produce { notes: string } — same evaluation with overrides applied.
 import { NextResponse } from 'next/server';
 import { evaluateNextProduceOrder } from '@/lib/next-order';
 
@@ -6,10 +7,17 @@ export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const result = await evaluateNextProduceOrder();
-    return NextResponse.json(result);
+    return NextResponse.json(await evaluateNextProduceOrder());
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json().catch(() => ({} as { notes?: string }));
+    return NextResponse.json(await evaluateNextProduceOrder({ notes: body?.notes }));
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 }
