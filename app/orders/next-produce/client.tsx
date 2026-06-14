@@ -130,6 +130,11 @@ export default function NextProduceClient({ initial }: { initial: NextOrderEvalu
         </div>
       </div>
 
+      {evaluation.error ? (
+        <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(196,146,58,0.12)', border: '1px solid rgba(196,146,58,0.35)', color: '#c4923a' }}>
+          <strong>Degraded mode</strong>: {evaluation.error}. Suggestions may be incomplete. Refresh after the upstream table populates.
+        </div>
+      ) : null}
       {errorMsg ? (
         <div className="rounded-lg px-4 py-3 text-sm" style={{ background: 'rgba(176,96,96,0.12)', border: '1px solid rgba(176,96,96,0.3)', color: '#b06060' }}>
           {errorMsg}
