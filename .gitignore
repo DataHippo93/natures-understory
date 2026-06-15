@@ -48,3 +48,11 @@ playwright-report/
 .*.json
 .*.ts
 .fuse_hidden*
+.pricing_patches/
+.v1_patches/
+.fix_patches/
+.hotfix_patches/
+.print_patches/
+.test_parser.py
+.test_llm.py
+.audit.py
