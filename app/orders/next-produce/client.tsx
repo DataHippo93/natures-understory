@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import type { NextOrderEvaluation, NextOrderRow } from '@/lib/next-order';
 import type { CostSource } from '@/lib/inventory-cost';
 import type { ParsedAction } from '@/lib/notes-parser';
+import type { LlmParsedLine } from '@/lib/notes-parser-llm';
 
 const FILTERS = [
   { value: 'order', label: 'To Order' },
@@ -64,6 +65,41 @@ function verdictColor(v: NextOrderRow['verdict']) {
   }
 }
 
+function confChipStyle(conf?: string): React.CSSProperties {
+  const c = (conf ?? '').toLowerCase();
+  if (c === 'high') return { background: 'rgba(122,170,98,0.22)', color: '#7aaa62' };
+  if (c === 'med')  return { background: 'rgba(196,146,58,0.22)', color: '#c4923a' };
+  if (c === 'low')  return { background: 'rgba(176,96,96,0.22)',  color: '#d96b6b' };
+  return { background: 'rgba(107,107,107,0.22)', color: '#6b7280' };
+}
+
+function AiActionItem({ line }: { line: LlmParsedLine }) {
+  const a = line.action;
+  const conf = a.kind !== 'ambiguous' && a.kind !== 'unparseable' ? a.confidence : undefined;
+  const isErr = a.kind === 'unparseable';
+  return (
+    <li className="flex flex-col gap-0.5" style={{ borderLeft: `2px solid ${isErr ? '#b06060' : 'var(--forest-mid)'}`, paddingLeft: 6 }}>
+      <div className="flex items-center gap-1.5">
+        <span style={{ color: 'var(--gold)', textTransform: 'uppercase', fontSize: '9px', letterSpacing: '0.1em' }}>{a.kind}</span>
+        {conf ? (
+          <span className="rounded px-1 py-0.5 text-[9px] font-bold uppercase" style={confChipStyle(conf)}>{conf}</span>
+        ) : null}
+        <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>{line.source === 'cache' ? '⊙ cache' : 'llm'}</span>
+      </div>
+      <div style={{ color: 'var(--cream)' }}>
+        {a.kind === 'add' && `${a.qty} ${a.unit} → ${line.bound_item_name ?? a.sku_hint}`}
+        {a.kind === 'skip' && `${line.bound_item_name ?? a.sku_hint} — ${a.reason}`}
+        {a.kind === 'so' && `${a.customer} · ${a.qty} ${a.unit} ${line.bound_item_name ?? a.sku_hint}`}
+        {a.kind === 'note' && `${line.bound_item_name ?? a.sku_hint ?? 'general'}: ${a.text}`}
+        {a.kind === 'flag' && `🚩 ${line.bound_item_name ?? a.sku_hint ?? 'general'} — ${a.reason}`}
+        {a.kind === 'ambiguous' && `❓ ambiguous: ${a.candidates.join(' / ')}`}
+        {a.kind === 'unparseable' && `⚠ unparseable — ${a.reason}`}
+      </div>
+      <div style={{ color: 'var(--text-muted)', fontSize: '9px' }}>"{line.raw}"</div>
+    </li>
+  );
+}
+
 export default function NextProduceClient({ initial }: { initial: NextOrderEvaluation }) {
   const [evaluation, setEvaluation] = useState<NextOrderEvaluation>(initial);
   const [notes, setNotes] = useState<string>('');
@@ -72,6 +108,8 @@ export default function NextProduceClient({ initial }: { initial: NextOrderEvalu
   const [emailDraft, setEmailDraft] = useState<{ subject: string; body: string; total_cases: number; total_dollars: number; line_count: number } | null>(null);
   const [draftLoading, setDraftLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [aiParse, setAiParse] = useState<{ lines: LlmParsedLine[]; totals: { cache_hits: number; llm_calls: number; total_cost_usd: number } } | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   const applyNotes = useCallback(async () => {
     setRefreshing(true);
@@ -108,6 +146,25 @@ export default function NextProduceClient({ initial }: { initial: NextOrderEvalu
       setErrorMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setDraftLoading(false);
+    }
+  }, [notes]);
+
+  const parseAi = useCallback(async () => {
+    setAiLoading(true);
+    setErrorMsg(null);
+    try {
+      const res = await fetch('/api/orders/produce/parse-notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message ?? data?.error ?? `HTTP ${res.status}`);
+      setAiParse(data);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiLoading(false);
     }
   }, [notes]);
 
@@ -187,6 +244,15 @@ note romaine: keep whole heads`}
                 {refreshing ? 'Applying…' : 'Apply Notes'}
               </button>
               <button
+                onClick={parseAi}
+                disabled={aiLoading}
+                className="rounded-md px-4 py-2 text-xs font-bold uppercase tracking-widest disabled:opacity-50"
+                style={{ background: 'var(--accent-pink, #b06b8c)', color: 'var(--forest-darkest)', fontFamily: 'var(--font-josefin)' }}
+                title="Parse notes with Claude (handles free-form human language)"
+              >
+                {aiLoading ? 'Parsing…' : 'Parse with AI'}
+              </button>
+              <button
                 onClick={generateEmail}
                 disabled={draftLoading}
                 className="rounded-md px-4 py-2 text-xs font-bold uppercase tracking-widest disabled:opacity-50"
@@ -204,11 +270,22 @@ note romaine: keep whole heads`}
         {/* Parsed actions panel */}
         <Card>
           <CardContent className="p-4">
-            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--gold)', fontFamily: 'var(--font-josefin)' }}>
-              Parsed Actions
-            </p>
-            {evaluation.parsed_notes.length === 0 ? (
-              <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>No notes parsed yet.</p>
+            <div className="flex items-baseline justify-between">
+              <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--gold)', fontFamily: 'var(--font-josefin)' }}>
+                Parsed Actions
+              </p>
+              {aiParse ? (
+                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                  AI · {aiParse.totals.llm_calls} call{aiParse.totals.llm_calls === 1 ? '' : 's'} · {aiParse.totals.cache_hits} cached · ${aiParse.totals.total_cost_usd.toFixed(4)}
+                </span>
+              ) : null}
+            </div>
+            {aiParse ? (
+              <ul className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--cream)' }}>
+                {aiParse.lines.map((l, i) => <AiActionItem key={i} line={l} />)}
+              </ul>
+            ) : evaluation.parsed_notes.length === 0 ? (
+              <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>No notes parsed yet. Try the <strong>Parse with AI</strong> button.</p>
             ) : (
               <ul className="mt-2 space-y-1.5 text-xs" style={{ color: 'var(--cream)' }}>
                 {evaluation.parsed_notes.map((a: ParsedAction, i) => (
