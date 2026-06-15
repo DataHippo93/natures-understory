@@ -9,6 +9,8 @@
 // live Payments API is still used elsewhere for *today's* intraday
 // numbers (Thrive lands a full day at a time).
 import { createAdminClient } from './supabase/admin';
+import { getInventoryCosts, type CostSource } from './inventory-cost';
+import { roundToNickel } from './round-nickel';
 
 const LOCAL_TZ = 'America/New_York';
 
@@ -393,14 +395,29 @@ export async function getEbtFlags(days = 30): Promise<EbtFlag[]> {
 
 export interface ProducePrice {
   variantId: string;
+  thriveItemId: string | null;
   itemName: string;
   unit: string;
-  currentPrice: number;
+  /**
+   * Live Thrive catalog retail (dollars). Source: thrive_product_catalog.price_cents.
+   * Falls back to the sales-history mode price (legacy current_price) if the
+   * catalog row is missing.
+   */
+  nowPrice: number;
+  /**
+   * Per-unit cost in dollars. Source: thrive_inventory_latest.current_lot_unit_cost
+   * (last-receipt). Falls back to thrive_product_catalog.default_cost_cents
+   * (stale — see costSource).
+   */
   cost: number;
+  costSource: CostSource;
+  /** Live margin computed off nowPrice + cost (not the cron's value). */
   currentMargin: number;
   elasticity: number;
   elasticitySource: string;
+  /** Optimal price from elasticity model, snapped to $0.05. */
   optimalPrice: number;
+  /** Optimal margin recomputed off the rounded optimalPrice + live cost. */
   optimalMargin: number;
   estUnitChangePct: number;
   estProfitChangePct: number;
@@ -413,30 +430,110 @@ export interface ProducePrice {
 }
 
 export async function getProducePricing(): Promise<ProducePrice[]> {
-  const rows = await reportQuery<Record<string, unknown>>(`
-    SELECT * FROM produce_pricing
-    ORDER BY CASE recommendation WHEN 'raise' THEN 0 WHEN 'lower' THEN 1 ELSE 2 END,
-             abs(optimal_price - current_price) DESC`);
-  return rows.map((r) => ({
-    variantId: String(r.variant_id),
-    itemName: String(r.item_name),
-    unit: String(r.unit ?? 'ea'),
-    currentPrice: Number(r.current_price ?? 0),
-    cost: Number(r.cost ?? 0),
-    currentMargin: Number(r.current_margin ?? 0),
-    elasticity: Number(r.elasticity ?? 0),
-    elasticitySource: String(r.elasticity_source ?? 'benchmark'),
-    optimalPrice: Number(r.optimal_price ?? 0),
-    optimalMargin: Number(r.optimal_margin ?? 0),
-    estUnitChangePct: Number(r.est_unit_change_pct ?? 0),
-    estProfitChangePct: Number(r.est_profit_change_pct ?? 0),
-    recommendation: String(r.recommendation ?? 'hold'),
-    confidence: String(r.confidence ?? 'low'),
-    rationale: String(r.rationale ?? ''),
-    daysWithSales: Number(r.days_with_sales ?? 0),
-    distinctPrices: Number(r.distinct_prices ?? 0),
-    totalUnits90d: Number(r.total_units_90d ?? 0),
-  }));
+  // 1. Pull the precomputed pricing recommendations + JOIN the live Thrive
+  //    catalog so we get the literal current retail and the catalog default
+  //    cost together in one round-trip. The catalog is the canonical source
+  //    of "Now price" — produce_pricing.current_price was derived from sales
+  //    history mode and drifts from the actual ring price for items that
+  //    sell at multiple price points (e.g. bananas individual vs. pack).
+  const rows = await reportQuery<{
+    variant_id: string;
+    item_name: string;
+    unit: string | null;
+    current_price: number | string | null;     // legacy fallback
+    cost: number | string | null;              // legacy fallback
+    current_margin: number | string | null;
+    elasticity: number | string | null;
+    elasticity_source: string | null;
+    optimal_price: number | string | null;
+    optimal_margin: number | string | null;
+    est_unit_change_pct: number | string | null;
+    est_profit_change_pct: number | string | null;
+    recommendation: string | null;
+    confidence: string | null;
+    rationale: string | null;
+    days_with_sales: number | string | null;
+    distinct_prices: number | string | null;
+    total_units_90d: number | string | null;
+    catalog_item_id: string | null;
+    catalog_price_cents: number | null;
+    catalog_default_cost_cents: number | null;
+  }>(`
+    SELECT p.*,
+           c.thrive_item_id     AS catalog_item_id,
+           c.price_cents        AS catalog_price_cents,
+           c.default_cost_cents AS catalog_default_cost_cents
+      FROM produce_pricing p
+      LEFT JOIN thrive_product_catalog c
+        ON c.thrive_variant_id = p.variant_id
+     ORDER BY CASE p.recommendation WHEN 'raise' THEN 0 WHEN 'lower' THEN 1 ELSE 2 END,
+              abs(p.optimal_price - p.current_price) DESC`);
+
+  // 2. Bulk-fetch fresh inventory cost (last receipt) for every item we have
+  //    a catalog id for. Items without a catalog id fall through to default.
+  const itemIds = rows.map((r) => r.catalog_item_id).filter((i): i is string => !!i);
+  const invCosts = await getInventoryCosts(itemIds);
+
+  return rows.map((r) => {
+    // Now price = live Thrive retail (catalog), else legacy current_price.
+    const nowPrice =
+      r.catalog_price_cents != null && r.catalog_price_cents > 0
+        ? r.catalog_price_cents / 100
+        : Number(r.current_price ?? 0);
+
+    // Cost: prefer last-receipt from inventory, then catalog default,
+    // and finally fall back to whatever produce_pricing.cost had (so we
+    // never regress on items where the cron's logic was richer than ours).
+    let cost = 0;
+    let costSource: CostSource = 'missing';
+    const inv = r.catalog_item_id ? invCosts.get(r.catalog_item_id) : undefined;
+    if (inv && inv.source !== 'missing') {
+      cost = inv.dollars;
+      costSource = inv.source;
+    } else if (r.catalog_default_cost_cents != null && r.catalog_default_cost_cents > 0) {
+      cost = r.catalog_default_cost_cents / 100;
+      costSource = 'default';
+    } else {
+      const legacy = Number(r.cost ?? 0);
+      if (legacy > 0) {
+        cost = legacy;
+        costSource = 'default';
+      }
+    }
+
+    // Recompute margin off the live values rather than trusting the cron.
+    const currentMargin = nowPrice > 0 ? ((nowPrice - cost) / nowPrice) * 100 : 0;
+
+    // Snap the suggested price to the nearest nickel. Then re-compute the
+    // optimal margin off the snapped price so it matches what we'd actually
+    // ring at the register.
+    const optimalPriceRaw = Number(r.optimal_price ?? 0);
+    const optimalPrice = roundToNickel(optimalPriceRaw);
+    const optimalMargin = optimalPrice > 0 ? ((optimalPrice - cost) / optimalPrice) * 100 : 0;
+
+    return {
+      variantId: String(r.variant_id),
+      thriveItemId: r.catalog_item_id ?? null,
+      itemName: String(r.item_name),
+      unit: String(r.unit ?? 'ea'),
+      nowPrice,
+      cost,
+      costSource,
+      currentMargin,
+      elasticity: Number(r.elasticity ?? 0),
+      elasticitySource: String(r.elasticity_source ?? 'benchmark'),
+      optimalPrice,
+      optimalMargin,
+      estUnitChangePct: Number(r.est_unit_change_pct ?? 0),
+      estProfitChangePct: Number(r.est_profit_change_pct ?? 0),
+      recommendation: String(r.recommendation ?? 'hold'),
+      confidence: String(r.confidence ?? 'low'),
+      rationale: String(r.rationale ?? ''),
+      daysWithSales: Number(r.days_with_sales ?? 0),
+      distinctPrices: Number(r.distinct_prices ?? 0),
+      totalUnits90d: Number(r.total_units_90d ?? 0),
+    };
+  });
 }
 
 /** Loss dollars per department within a window (from loss_ledger). */

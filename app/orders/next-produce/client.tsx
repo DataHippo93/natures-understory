@@ -1,8 +1,10 @@
+import type React from 'react';
 'use client';
 
 import { useState, useMemo, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import type { NextOrderEvaluation, NextOrderRow } from '@/lib/next-order';
+import type { CostSource } from '@/lib/inventory-cost';
 import type { ParsedAction } from '@/lib/notes-parser';
 
 const FILTERS = [
@@ -21,6 +23,22 @@ function urgencyColor(dos: number | null): string {
   if (dos < 7) return '#7aaa62';
   return '#6b7280';
 }
+function costShort(s: CostSource): string {
+  return s === 'last_receipt' ? 'fresh' : s === 'default' ? 'stale' : 'n/a';
+}
+function costTitle(s: CostSource): string {
+  return s === 'last_receipt'
+    ? 'Cost from most recent inventory lot in Thrive'
+    : s === 'default'
+      ? 'Catalog default cost — may be out of date'
+      : 'No cost on file in Thrive';
+}
+function costChipStyle(s: CostSource): React.CSSProperties {
+  if (s === 'last_receipt') return { background: 'rgba(122,170,98,0.18)', color: '#7aaa62', fontFamily: 'var(--font-josefin)' };
+  if (s === 'default')      return { background: 'rgba(196,146,58,0.20)', color: '#c4923a', fontFamily: 'var(--font-josefin)' };
+  return { background: 'rgba(176,96,96,0.20)', color: '#d96b6b', fontFamily: 'var(--font-josefin)' };
+}
+
 function fmt(v: number | null | undefined, digits = 1): string {
   if (v == null || !isFinite(v)) return '—';
   return v.toFixed(digits);
@@ -239,7 +257,7 @@ note romaine: keep whole heads`}
             <table className="w-full text-xs">
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--forest-mid)' }}>
-                  {['#','Item','OH','30d Vel','7d Vel','Lost','Days','Truck','Cases','Cost','Retail','Margin','Verdict','Override'].map((h) => (
+                  {['#','Item','OH','30d Vel','7d Vel','Lost','Days','Truck','Cases','Cost','Src','Retail','Margin','Verdict','Override'].map((h) => (
                     <th key={h} className="sticky top-0 px-2 py-2 text-left font-bold uppercase tracking-widest"
                       style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)', fontSize: '9px', background: 'var(--forest)' }}>{h}</th>
                   ))}
@@ -247,7 +265,7 @@ note romaine: keep whole heads`}
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={14} className="px-3 py-8 text-center" style={{ color: 'var(--text-muted)' }}>No items match this filter.</td></tr>
+                  <tr><td colSpan={15} className="px-3 py-8 text-center" style={{ color: 'var(--text-muted)' }}>No items match this filter.</td></tr>
                 ) : filtered.map((r, i) => {
                   const v = verdictColor(r.verdict);
                   const finalCases = r.override_cases != null ? r.override_cases : r.suggested_cases;
@@ -278,6 +296,15 @@ note romaine: keep whole heads`}
                         </span>
                       </td>
                       <td className="px-2 py-1.5 text-right align-top" style={{ color: 'var(--cream)' }}>{fmtDollars(r.unit_cost_dollars)}</td>
+                      <td className="px-2 py-1.5 align-top">
+                        <span
+                          className="rounded px-1 py-0.5 text-[9px] font-bold uppercase tracking-widest"
+                          title={costTitle(r.cost_source)}
+                          style={costChipStyle(r.cost_source)}
+                        >
+                          {costShort(r.cost_source)}
+                        </span>
+                      </td>
                       <td className="px-2 py-1.5 text-right align-top" style={{ color: 'var(--cream)' }}>{fmtDollars(r.sticky_retail_dollars)}</td>
                       <td className="px-2 py-1.5 text-right align-top" style={{ color: (r.expected_margin_pct ?? 0) >= 0.40 ? '#7aaa62' : '#b06060' }}>{fmtPct(r.expected_margin_pct)}</td>
                       <td className="px-2 py-1.5 align-top">
