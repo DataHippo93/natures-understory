@@ -16,6 +16,7 @@
 // transparency; suggested_cases is computed against clean velocity.
 
 import { createAdminClient } from './supabase/admin';
+import { getInventoryCosts, type CostSource } from './inventory-cost';
 import { loadLossByItem30d } from './loss-match';
 import { isCoreStaple } from './core-staples';
 import { parseNotes, type ParsedAction, type Catalog as ParserCatalog } from './notes-parser';
@@ -48,7 +49,8 @@ export interface NextOrderRow {
   vendor_name: string | null;
   next_truck_date: string | null;
   days_until_truck: number | null;
-  target_dos: number | null;          // truck cadence × 1.5 buffer
+  target_dos: number | null;          // overrides[<order_day>]  ??  gap × buffer_mult
+  target_dos_source: 'override' | 'multiplier' | 'fallback' | null;
 
   // Pack + suggestion
   units_per_case: number | null;
@@ -58,6 +60,7 @@ export interface NextOrderRow {
   // Profit-center
   sticky_retail_dollars: number | null;
   unit_cost_dollars: number | null;
+  cost_source: CostSource;        // last_receipt | default | missing
   loss_rate_30d: number;              // 0..1
   expected_margin_pct: number | null;
   is_core_staple: boolean;
@@ -136,14 +139,54 @@ function nextOrderDate(orderDays: string[] | null | undefined, fromISO?: string)
   return null;
 }
 
-/** Target days-of-supply: 1.5× the gap between THIS truck and the NEXT. */
-function targetDosFor(orderDays: string[] | null | undefined, fromISO?: string): { trucks: [string, string] | null; targetDos: number | null } {
+const DAY_KEYS: Record<string, string> = {
+  monday: 'mon', tuesday: 'tue', wednesday: 'wed', thursday: 'thu',
+  friday: 'fri', saturday: 'sat', sunday: 'sun',
+};
+
+/**
+ * Target days-of-supply per order day. Order of preference:
+ *   1. vendor.target_dos_overrides[<short day key>]  (explicit per-weekday)
+ *   2. gap_to_next_truck * vendor.target_buffer_multiplier
+ *   3. gap × 1.5 (legacy default)
+ */
+function targetDosFor(
+  vendor: VendorMapRow | null,
+  orderDays: string[] | null | undefined,
+  fromISO?: string
+): { trucks: [string, string] | null; targetDos: number | null; source: 'override' | 'multiplier' | 'fallback' | null } {
   const t1 = nextOrderDate(orderDays, fromISO);
-  if (!t1) return { trucks: null, targetDos: null };
+  if (!t1) return { trucks: null, targetDos: null, source: null };
+
+  // Lookup an explicit override for THIS order's weekday first.
+  const t1day = weekdayOf(t1.date);                  // e.g. "monday"
+  const shortKey = DAY_KEYS[t1day] ?? t1day.slice(0, 3);
+  const overrides = vendor?.target_dos_overrides ?? null;
+  if (overrides && typeof overrides === 'object') {
+    const raw = overrides[shortKey] ?? overrides[t1day];
+    if (raw != null) {
+      const v = Number(raw);
+      if (Number.isFinite(v) && v > 0) {
+        const t2 = nextOrderDate(orderDays, addDays(t1.date, 1));
+        return { trucks: t2 ? [t1.date, t2.date] : [t1.date, ''], targetDos: Math.round(v * 10) / 10, source: 'override' };
+      }
+    }
+  }
+
+  // Else compute gap × multiplier.
   const t2 = nextOrderDate(orderDays, addDays(t1.date, 1));
-  if (!t2) return { trucks: [t1.date, ''], targetDos: 4.5 };
-  const gap = Math.max(1, Math.round((new Date(t2.date + 'T12:00:00').getTime() - new Date(t1.date + 'T12:00:00').getTime()) / 86_400_000));
-  return { trucks: [t1.date, t2.date], targetDos: Math.round((gap * 1.5) * 10) / 10 };
+  if (!t2) return { trucks: [t1.date, ''], targetDos: 4.5, source: 'fallback' };
+  const gap = Math.max(
+    1,
+    Math.round((new Date(t2.date + 'T12:00:00').getTime() - new Date(t1.date + 'T12:00:00').getTime()) / 86_400_000)
+  );
+  const mult = Number(vendor?.target_buffer_multiplier ?? 1.5);
+  const safeMult = Number.isFinite(mult) && mult > 0 ? mult : 1.5;
+  return {
+    trucks: [t1.date, t2.date],
+    targetDos: Math.round(gap * safeMult * 10) / 10,
+    source: safeMult === 1.5 ? 'fallback' : 'multiplier',
+  };
 }
 
 interface CatalogRow {
@@ -168,6 +211,8 @@ interface VendorMapRow {
   thrive_vendor_id: string | null;
   display_name: string;
   order_days: string[] | null;
+  target_buffer_multiplier: number | string | null;
+  target_dos_overrides: Record<string, number | string> | null;
 }
 interface SalesAggRow {
   item_id: string;
@@ -213,6 +258,9 @@ async function _evaluateNextProduceOrderImpl(opts: { notes?: string } = {}): Pro
     if (!latestSnapshotTs || r.snapshot_ts > latestSnapshotTs) latestSnapshotTs = r.snapshot_ts;
   }
 
+  // 2b. Live inventory cost (last-receipt) with fallback chain — keyed by item.
+  const invCostByItem = await getInventoryCosts(catalog.map((c) => c.thrive_item_id));
+
   // 3. Sales velocity (30d + 7d)
   const sales = await rpc<SalesAggRow>(`
     SELECT item_id,
@@ -239,7 +287,7 @@ async function _evaluateNextProduceOrderImpl(opts: { notes?: string } = {}): Pro
   // 5. Vendor map
   let vendors: VendorMapRow[] = [];
   try {
-    vendors = await rpc<VendorMapRow>(`SELECT thrive_vendor_id, display_name, order_days FROM produce_vendors WHERE active = true`);
+    vendors = await rpc<VendorMapRow>(`SELECT thrive_vendor_id, display_name, order_days, target_buffer_multiplier, target_dos_overrides FROM produce_vendors WHERE active = true`);
   } catch { /* table may not exist on first deploy */ }
   const vendorById = new Map<string, VendorMapRow>();
   for (const v of vendors) if (v.thrive_vendor_id) vendorById.set(v.thrive_vendor_id, v);
@@ -278,7 +326,7 @@ async function _evaluateNextProduceOrderImpl(opts: { notes?: string } = {}): Pro
     let orderDays: string[] = vendor?.order_days ?? [];
     let scheduleSource: 'db' | 'fallback' | 'none' = vendor ? 'db' : 'none';
     if (!vendor) { orderDays = FALLBACK_SCHEDULE['alberts']; scheduleSource = 'fallback'; }
-    const { trucks, targetDos } = targetDosFor(orderDays, today);
+    const { trucks, targetDos, source: targetDosSource } = targetDosFor(vendor, orderDays, today);
     const next_truck_date = trucks ? trucks[0] : null;
     const days_until_truck = next_truck_date ? Math.round((new Date(next_truck_date + 'T12:00:00').getTime() - new Date(today + 'T12:00:00').getTime()) / 86_400_000) : null;
 
@@ -292,9 +340,21 @@ async function _evaluateNextProduceOrderImpl(opts: { notes?: string } = {}): Pro
 
     // Profit-center
     const sticky_retail_dollars = c.price_cents != null && c.price_cents > 0 ? c.price_cents / 100 : null;
-    const unit_cost_dollars = c.default_cost_cents != null && c.default_cost_cents > 0 && unitsPerCase && unitsPerCase > 0
-      ? c.default_cost_cents / 100 / unitsPerCase
-      : (c.default_cost_cents != null && c.default_cost_cents > 0 ? c.default_cost_cents / 100 : null);
+
+    // Cost: prefer live inventory (last receipt), then catalog default,
+    // then mark missing. Per-case → per-unit normalisation kicks in only
+    // for the catalog-default path; current_lot_unit_cost is already per
+    // selling unit. (Same assumption Thrive uses internally.)
+    const invCost = invCostByItem.get(c.thrive_item_id);
+    const cost_source: CostSource = invCost?.source ?? 'missing';
+    let unit_cost_dollars: number | null = null;
+    if (invCost && invCost.source === 'last_receipt') {
+      unit_cost_dollars = invCost.dollars;
+    } else if (c.default_cost_cents != null && c.default_cost_cents > 0) {
+      unit_cost_dollars = unitsPerCase && unitsPerCase > 0
+        ? c.default_cost_cents / 100 / unitsPerCase
+        : c.default_cost_cents / 100;
+    }
     // loss_rate = loss/(loss + sold_clean) — fraction of throughput that becomes loss
     const throughput_30d = units_sold_30d_clean + lossUnits;
     const loss_rate_30d = throughput_30d > 0 ? lossUnits / throughput_30d : 0;
@@ -339,6 +399,8 @@ async function _evaluateNextProduceOrderImpl(opts: { notes?: string } = {}): Pro
     if (lossUnits > 0 && lossUnits >= units_sold_30d_raw * 0.10) flags.push('high_loss_rate');
     if (scheduleSource === 'fallback') flags.push('vendor_mapping_fallback');
     if (verdict === 'SKIP') flags.push('profit_center_skip');
+    if (cost_source === 'default') flags.push('cost_stale');
+    if (cost_source === 'missing') flags.push('cost_missing');
 
     const rationale: string[] = [];
     if (dos != null) rationale.push(`${dos.toFixed(1)}d supply at ${velocity_per_day_clean.toFixed(2)} u/d clean`);
@@ -397,11 +459,13 @@ async function _evaluateNextProduceOrderImpl(opts: { notes?: string } = {}): Pro
       next_truck_date,
       days_until_truck,
       target_dos: targetDos,
+      target_dos_source: targetDosSource,
       units_per_case: unitsPerCase,
       suggested_units: Math.round(suggested_units * 10) / 10,
       suggested_cases: final_cases,
       sticky_retail_dollars,
       unit_cost_dollars: unit_cost_dollars != null ? Math.round(unit_cost_dollars * 100) / 100 : null,
+      cost_source,
       loss_rate_30d: Math.round(loss_rate_30d * 1000) / 1000,
       expected_margin_pct: expected_margin_pct != null ? Math.round(expected_margin_pct * 1000) / 1000 : null,
       is_core_staple: core_staple,

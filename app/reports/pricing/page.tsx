@@ -1,5 +1,7 @@
+import type React from 'react';
 import { createClient } from '@/lib/supabase/server';
 import { getProducePricing, type ProducePrice } from '@/lib/thrive';
+import type { CostSource } from '@/lib/inventory-cost';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 
 export const dynamic = 'force-dynamic';
@@ -12,6 +14,24 @@ const confBadge: Record<string, { bg: string; fg: string }> = {
 };
 
 function money(n: number) { return `$${n.toFixed(2)}`; }
+
+function costShort(s: CostSource): string {
+  switch (s) { case 'last_receipt': return 'fresh'; case 'default': return 'stale'; case 'missing': return 'n/a'; }
+}
+function costTitle(s: CostSource): string {
+  switch (s) {
+    case 'last_receipt': return 'Cost from most recent inventory lot (Thrive)';
+    case 'default':      return 'Cost from catalog default — may be out of date';
+    case 'missing':      return 'No cost on file in Thrive';
+  }
+}
+function costChipStyle(s: CostSource): React.CSSProperties {
+  switch (s) {
+    case 'last_receipt': return { background: 'rgba(122,170,98,0.18)', color: '#7aaa62', fontFamily: 'var(--font-josefin)' };
+    case 'default':      return { background: 'rgba(196,146,58,0.20)', color: '#c4923a', fontFamily: 'var(--font-josefin)' };
+    case 'missing':      return { background: 'rgba(176,96,96,0.20)', color: '#d96b6b', fontFamily: 'var(--font-josefin)' };
+  }
+}
 
 export default async function ProducePricingPage({
   searchParams,
@@ -37,7 +57,7 @@ export default async function ProducePricingPage({
   const highConf = rows.filter((r) => r.confidence === 'high');
   const underwater = rows.filter((r) => r.currentMargin < 0).length;
   const projGain = rows.reduce((s, r) =>
-    s + (r.recommendation !== 'hold' ? (r.optimalPrice - r.currentPrice) * r.totalUnits90d / 3 : 0), 0);
+    s + (r.recommendation !== 'hold' ? (r.optimalPrice - r.nowPrice) * r.totalUnits90d / 3 : 0), 0);
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -89,6 +109,14 @@ export default async function ProducePricingPage({
         ))}
       </div>
 
+      <div className="rounded-lg px-3 py-2 text-[11px]"
+           style={{ background: 'var(--forest)', border: '1px solid var(--forest-mid)', color: 'var(--text-muted)' }}>
+        <span style={{ color: 'var(--sage)', fontWeight: 600 }}>Cost source</span>
+        : <span style={{ color: '#7aaa62' }}>fresh</span> = last receipt (Thrive inventory),
+        <span style={{ color: '#c4923a' }}> stale</span> = catalog default (may be out of date — Albert&apos;s pricelist pipeline pending),
+        <span style={{ color: '#d96b6b' }}> n/a</span> = no cost in Thrive. Now price is live Thrive catalog retail; suggested prices snap to $0.05.
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle>Recommendations ({shown.length})</CardTitle>
@@ -99,7 +127,7 @@ export default async function ProducePricingPage({
             <table className="w-full text-xs">
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--forest-mid)' }}>
-                  {['Item', 'Now', 'Cost', 'Margin', 'Elast.', 'Suggested', 'New Margin', 'Δ Units', 'Δ Profit', 'Move', 'Conf'].map((h) => (
+                  {['Item', 'Now', 'Cost', 'Src', 'Margin', 'Elast.', 'Suggested', 'New Margin', 'Δ Units', 'Δ Profit', 'Move', 'Conf'].map((h) => (
                     <th key={h} className="px-3 py-3 text-left font-bold uppercase tracking-widest sticky top-0"
                         style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-josefin)', fontSize: '10px', background: 'var(--forest)' }}>{h}</th>
                   ))}
@@ -112,8 +140,17 @@ export default async function ProducePricingPage({
                       {r.itemName} <span style={{ color: 'var(--text-muted)' }}>/{r.unit}</span>
                       <span className="block text-[10px]" style={{ color: 'var(--text-muted)' }} title={r.rationale}>{r.rationale.slice(0, 70)}</span>
                     </td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--sage)' }}>{money(r.currentPrice)}</td>
-                    <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }}>{money(r.cost)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--sage)' }} title="Live Thrive catalog retail">{money(r.nowPrice)}</td>
+                    <td className="px-3 py-2.5" style={{ color: 'var(--text-muted)' }} title={costTitle(r.costSource)}>{r.cost > 0 ? money(r.cost) : '—'}</td>
+                    <td className="px-3 py-2.5">
+                      <span
+                        className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest"
+                        title={costTitle(r.costSource)}
+                        style={costChipStyle(r.costSource)}
+                      >
+                        {costShort(r.costSource)}
+                      </span>
+                    </td>
                     <td className="px-3 py-2.5" style={{ color: r.currentMargin < 15 ? '#b06060' : 'var(--sage)' }}>{r.currentMargin.toFixed(0)}%</td>
                     <td className="px-3 py-2.5" style={{ color: 'var(--sage)' }}>{r.elasticity.toFixed(2)}<span className="text-[10px]" style={{ color: 'var(--text-muted)' }}> {r.elasticitySource === 'regression' ? 'Reg' : 'Bm'}</span></td>
                     <td className="px-3 py-2.5 font-semibold" style={{ color: '#c4923a' }}>{money(r.optimalPrice)}</td>
@@ -127,7 +164,7 @@ export default async function ProducePricingPage({
                   </tr>
                 ))}
                 {shown.length === 0 && (
-                  <tr><td colSpan={11} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                  <tr><td colSpan={12} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
                     {rows.length === 0 ? 'No model output yet — the weekly pricing job hasn’t run.' : 'No items match this filter.'}
                   </td></tr>
                 )}
