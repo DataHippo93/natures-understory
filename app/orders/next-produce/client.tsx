@@ -1,6 +1,6 @@
-import type React from 'react';
 'use client';
 
+import type React from 'react';
 import { useState, useMemo, useCallback } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import type { NextOrderEvaluation, NextOrderRow } from '@/lib/next-order';
