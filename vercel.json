@@ -12,6 +12,7 @@
     { "path": "/api/cron/pull-pricelists",  "schedule": "50 10 * * 1,4" },
     { "path": "/api/cron/pull-invoice",     "schedule": "*/20 21-23 * * 1,4" },
     { "path": "/api/cron/pull-invoice",     "schedule": "*/20 0-3 * * 2,5" },
-    { "path": "/api/cron/compute-features", "schedule": "30 7 * * *" }
+    { "path": "/api/cron/compute-features", "schedule": "30 7 * * *" },
+    { "path": "/api/cron/produce-sales-report", "schedule": "1 4 * * *" }
   ]
 }
