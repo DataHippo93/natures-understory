@@ -500,9 +500,14 @@ export async function GET(req: NextRequest) {
       ? Boolean(src_row.stockout)
       : null;
 
-    // cost recompute
+    // Loss-tally rings are counted in a.qty but produce /bin/bash revenue at register.
+    // Units that actually produced cash revenue:
+    const sold_qty = Math.max(0, a.qty - lqty);
+
+    // cost recompute — only the units that actually sold incur COGS here;
+    // loss-tally cost is tracked separately via loss_ledger.
     a.cost_cents_recomputed = a.cat_cost_cents
-      ? Math.round(a.qty * a.cat_cost_cents)
+      ? Math.round(sold_qty * a.cat_cost_cents)
       : a.cost_cents_ingested;
     a.cost_delta_cents = a.cost_cents_ingested - a.cost_cents_recomputed;
 
@@ -519,17 +524,20 @@ export async function GET(req: NextRequest) {
 
     a.cost_cents = a.cost_cents_recomputed;
 
-    const avg_unit_rev = a.qty ? a.revenue_cents / a.qty : 0;
-    a.net_qty = a.qty - lqty;
-    a.net_revenue_cents = a.revenue_cents - Math.round(lqty * avg_unit_rev);
+    // Revenue from sold units only. Loss-tally rings already ring at /bin/bash, so
+    // a.revenue_cents excludes them naturally — do NOT subtract again
+    // (previous bug: net_rev double-counted loss via lqty * avg_unit_rev).
+    a.net_qty = sold_qty;
+    a.net_revenue_cents = a.revenue_cents;
 
-    // CONTRIBUTION per line = net_revenue - cost
+    // CONTRIBUTION per line = revenue from sold units − cost of sold units
     a.contribution_cents = a.net_revenue_cents - a.cost_cents;
     a.contribution_pct = a.net_revenue_cents ? (a.contribution_cents / a.net_revenue_cents) * 100 : 0;
 
-    // flags
-    a.is_spoilage = a.revenue_cents === 0 && a.cost_cents > 0 && !a.owner_consumption;
-    const cost_per_unit = a.qty ? a.cost_cents / a.qty : 0;
+    // flags — spoilage = had ring activity but no revenue (incl. loss-only rows)
+    a.is_spoilage = a.revenue_cents === 0 && a.qty > 0 && !a.owner_consumption;
+    const avg_unit_rev = a.qty ? a.revenue_cents / a.qty : 0;
+    const cost_per_unit = sold_qty ? a.cost_cents / sold_qty : 0;
     a.cost_outlier = cost_per_unit > 3 * avg_unit_rev && a.cost_cents > 500 && a.revenue_cents > 0;
   }
 
