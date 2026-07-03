@@ -76,20 +76,16 @@ function fmtPctSigned(x: number): string {
   return `${x >= 0 ? '+' : ''}${x.toFixed(1)}%`;
 }
 
-// v7: unicode sparkline from an array of numbers.
-const SPARK_CHARS = ['â–', 'â–‚', 'â–ƒ', 'â–„', 'â–…', 'â–†', 'â–‡', 'â–ˆ'];
-function sparkline(values: number[]): string {
+// v7.1: SVG sparkline (replaces unicode block chars for reliable email rendering).
+function svgSpark(values: number[], color: string): string {
   if (values.length === 0) return '';
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min;
-  if (range === 0) return SPARK_CHARS[3].repeat(values.length);
-  return values
-    .map(v => {
-      const idx = Math.min(SPARK_CHARS.length - 1, Math.max(0, Math.floor(((v - min) / range) * (SPARK_CHARS.length - 1))));
-      return SPARK_CHARS[idx];
-    })
-    .join('');
+  const w = 60, h = 16;
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const step = values.length > 1 ? w / (values.length - 1) : w;
+  const pts = values.map((v, i) => `${(i * step).toFixed(2)},${(h - ((v - min) / range) * h).toFixed(2)}`).join(' ');
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg"><polyline fill="none" stroke="${color}" stroke-width="1.5" points="${pts}"/></svg>`;
 }
 
 // v7: gate types
@@ -557,7 +553,7 @@ export async function GET(req: NextRequest) {
   if (hasHold) {
     const failed = gates.filter(g => g.outcome === 'hold');
     const failedIds = failed.map(g => g.id).join(', ');
-    const alertHtml = `<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111">
+    const alertHtml = `<html><head><meta charset="utf-8"></head><body style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111">
 <h2 style="margin:0 0 8px 0;color:#a00">Produce report SKIPPED &mdash; ${esc(date_us)}</h2>
 <div style="color:#666;margin-bottom:14px">${esc(weekday_label)}</div>
 <p><b>Failed gates:</b> ${esc(failedIds)}</p>
@@ -930,8 +926,8 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
   const rev_series = spark_dates.map(d => (daily_rev[d] ?? 0) / 100);
   const contrib_series = spark_dates.map(d => ((daily_rev[d] ?? 0) - (daily_cost[d] ?? 0)) / 100);
   const showSparks = baselineDays >= 5;
-  const rev_spark = showSparks ? sparkline(rev_series) : '';
-  const contrib_spark = showSparks ? sparkline(contrib_series) : '';
+  const rev_spark = showSparks ? svgSpark(rev_series, '#0F7A4E') : '';
+  const contrib_spark = showSparks ? svgSpark(contrib_series, '#B8860B') : '';
 
   // ---------- ACTIONS: compute per-row pills ----------
   const rowActions = new Map<string, ActionPill[]>();
@@ -1066,7 +1062,7 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
   const profit_cents_total = Math.round(contrib_total * 100);
   const profit_color = profit_cents_total >= 0 ? '#0a7' : '#a00';
   const spark_line_html = showSparks
-    ? `<div style="font-family:monospace;font-size:14px;color:#555;margin-top:6px">rev ${esc(rev_spark)} &nbsp; contrib ${esc(contrib_spark)} <span style="color:#888;font-size:11px">(7d)</span></div>`
+    ? `<div style="font-size:14px;color:#555;margin-top:6px;line-height:16px">rev ${rev_spark} &nbsp; contrib ${contrib_spark} <span style="color:#888;font-size:11px">(7d)</span></div>`
     : `<div style="color:#888;font-size:11px;margin-top:6px">7-day trend suppressed (only ${baselineDays} distinct days in baseline)</div>`;
 
   const do_today_html = do_today.length
@@ -1074,9 +1070,9 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
     : `<div style="margin-top:16px;color:#0a7"><b>Do today:</b> nothing flagged &mdash; produce is clean.</div>`;
 
   const headline_html =
-    `<div style="margin:16px 0 4px 0;font-size:13px;color:#555">Yesterday's Produce Profit</div>` +
-    `<div style="font-size:34px;font-weight:bold;color:${profit_color};line-height:1.1">${usd(profit_cents_total)}</div>` +
-    `<div style="color:#666;font-size:12px;margin-top:4px">revenue ${usd(Math.round(net_rev * 100))} &middot; margin ${fmtPctSigned(contrib_pct)}</div>` +
+    `<div style="margin:16px 0 4px 0;font-size:13px;color:#555">Yesterday's Produce Sales</div>` +
+    `<div style="font-size:34px;font-weight:bold;color:#111;line-height:1.1">${usd(Math.round(net_rev * 100))}</div>` +
+    `<div style="color:#666;font-size:12px;margin-top:4px">Profit <span style="color:${profit_color}">${usd(profit_cents_total)}</span> &middot; Margin ${fmtPctSigned(contrib_pct)} &middot; ${skus_sold} SKUs sold</div>` +
     spark_line_html +
     do_today_html;
 
@@ -1123,11 +1119,39 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
 </table>`
     : `<div style="margin-top:14px;padding:10px;background:#eaf7ea;color:#0a7;border-radius:4px">No SKUs required action yesterday. Full detail in the audit CSV.</div>`;
 
+  // v7.1: Top 10 by revenue ("What sold yesterday")
+  const top_movers = rows.slice().sort((a, b) => b.net_revenue_cents - a.net_revenue_cents).slice(0, 10);
+  const day_total_cents_all = rows.reduce((s, r) => s + r.net_revenue_cents, 0);
+  const top_movers_total_cents = top_movers.reduce((s, r) => s + r.net_revenue_cents, 0);
+  const top_movers_pct = day_total_cents_all ? (top_movers_total_cents / day_total_cents_all) * 100 : 0;
+  const top_movers_rows_html = top_movers.map(r => {
+    const pct = day_total_cents_all ? (r.net_revenue_cents / day_total_cents_all) * 100 : 0;
+    return `<tr>` +
+      `<td align="left">${item_cell(r)}</td>` +
+      `<td align="right">${r.qty.toFixed(2)}</td>` +
+      `<td align="right">${usd(r.net_revenue_cents)}</td>` +
+      `<td align="right">${pct.toFixed(1)}%</td>` +
+      `</tr>`;
+  }).join('');
+  const top_movers_html = top_movers.length
+    ? `<h3 style="margin:22px 0 6px 0;font-size:14px;color:#333">What sold yesterday <span style="color:#888;font-size:12px">(top 10 by revenue)</span></h3>` +
+      `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;border-color:#ccc">` +
+      `<thead><tr bgcolor="#f4f4f4">` +
+      `<th align="left">Product &middot; Variant</th>` +
+      `<th align="right">Qty</th>` +
+      `<th align="right">Revenue</th>` +
+      `<th align="right">% of day</th>` +
+      `</tr></thead>` +
+      `<tbody>${top_movers_rows_html}</tbody>` +
+      `<tfoot><tr bgcolor="#f9f9f9"><td align="left"><b>Total of top 10:</b></td><td></td><td align="right"><b>${usd(top_movers_total_cents)}</b></td><td align="right"><b>${top_movers_pct.toFixed(1)}%</b></td></tr></tfoot>` +
+      `</table>`
+    : '';
+
   const preview_banner_html = isPreview
     ? `<div style="margin:0 0 12px 0;padding:6px 10px;background:#fffbe5;border-left:4px solid #c60;font-size:12px;color:#555">[v7 PREVIEW] Report generated on demand &mdash; recipient overridden to ${esc(toOverride ?? '')}.</div>`
     : '';
 
-  const html_body = `<html><body style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;max-width:820px">
+  const html_body = `<html><head><meta charset="utf-8"></head><body style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;max-width:820px">
 ${preview_banner_html}
 <h2 style="margin:0 0 4px 0">PRODUCE SALES &mdash; ${esc(date_us)}</h2>
 <div style="color:#666;margin-bottom:6px">${esc(weekday_label)}</div>
@@ -1135,6 +1159,8 @@ ${preview_banner_html}
 ${strip_html}
 
 ${headline_html}
+
+${top_movers_html}
 
 <h3 style="margin:22px 0 6px 0;font-size:14px;color:#333">Actionable SKUs <span style="color:#888;font-size:12px">(${actionable_rows.length} of ${skus_sold})</span></h3>
 ${actionable_table_html}
@@ -1158,9 +1184,9 @@ ${csv_link_or_note}
   const _do_today_lines = do_today.length ? do_today.map(s => `  - ${s}`).join('\n') : '  (nothing flagged)';
   const plain_body =
     `${isPreview ? '[v7 PREVIEW] ' : ''}PRODUCE SALES - ${date_us}\n${weekday_label}\n\n` +
-    `Yesterday's Produce Profit: ${usd(profit_cents_total)}\n` +
-    `Revenue: ${usd(Math.round(net_rev * 100))}   Margin: ${fmtPctSigned(contrib_pct)}\n` +
-    (showSparks ? `Trend (7d): rev ${rev_spark}  contrib ${contrib_spark}\n` : '') +
+    `Yesterday's Produce Sales: ${usd(Math.round(net_rev * 100))}\n` +
+    `Profit: ${usd(profit_cents_total)}   Margin: ${fmtPctSigned(contrib_pct)}   SKUs sold: ${skus_sold}\n` +
+    (showSparks ? `Trend (7d) - see HTML view for chart\n` : '') +
     `\nDo today:\n${_do_today_lines}\n` +
     `\nActionable SKUs: ${actionable_rows.length} of ${skus_sold}\n` +
     (drift_rows.length ? `Count drift: ${drift_rows.length} SKUs\n` : '') +
@@ -1194,7 +1220,7 @@ ${csv_link_or_note}
     headers: {
       Authorization: `Bearer ${RESEND_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'natures-storehouse-produce-report/7.0 (Node fetch)',
+      'User-Agent': 'natures-storehouse-produce-report/7.1 (Node fetch)',
       Accept: 'application/json',
     },
     body: JSON.stringify(payload),
@@ -1212,7 +1238,7 @@ ${csv_link_or_note}
   const resend_id = send_result.id;
 
   const summary = {
-    version: 'v7',
+    version: 'v7.1',
     preview: isPreview,
     resend_email_id: resend_id,
     from: FROM_ADDR,
