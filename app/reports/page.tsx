@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Page } from '@/components/ui/page';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -75,7 +76,7 @@ export default async function ReportsPage() {
     : 'Never';
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       <div>
         <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
           Sales Reports
@@ -198,6 +199,6 @@ export default async function ReportsPage() {
           </Card>
         </div>
       )}
-    </div>
+    </Page>
   );
 }

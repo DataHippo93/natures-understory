@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { Page } from '@/components/ui/page';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { getShiftAnalysisData } from '@/lib/data';
 import { QuietScoreChart } from '@/components/charts/quiet-score-chart';
@@ -23,7 +24,7 @@ export default async function ShiftAnalysisPage({
   const peakHours  = data.hourlyScores.filter((h) => h.score < 4).length;
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       {/* Header + filter */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -116,6 +117,6 @@ export default async function ShiftAnalysisPage({
           </CardContent>
         </Card>
       </div>
-    </div>
+    </Page>
   );
 }

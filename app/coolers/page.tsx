@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import { Page } from '@/components/ui/page';
 import { createClient } from '@/lib/supabase/server';
 import { getCoolerDashboard, OUT_OF_RANGE_ALERT_MINUTES, type CoolerStatus, type CoolerState } from '@/lib/coolers';
 import { Card, CardContent } from '@/components/ui/card';
@@ -45,7 +46,7 @@ export default async function CoolersPage() {
   const okCount = coolers.filter((c) => c.state === 'ok').length;
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
@@ -116,7 +117,7 @@ export default async function CoolersPage() {
         Acceptable ranges are per-cooler (FDA default 32–41°F for coolers, -20–5°F for freezers).
         To adjust a range or rename a sensor, edit the <span className="font-mono">cooler_config</span> table.
       </p>
-    </div>
+    </Page>
   );
 }
 

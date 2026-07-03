@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { Page } from '@/components/ui/page';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { getLaborRatioData } from '@/lib/data';
 import { LaborRatioChart } from '@/components/charts/labor-ratio-chart';
@@ -31,7 +32,7 @@ export default async function LaborRatioPage({
   const hasLaborData = data.actuals.some((a) => a.hasLaborData);
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       {/* Header + filter */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -173,6 +174,6 @@ export default async function LaborRatioPage({
           </Card>
         ))}
       </div>
-    </div>
+    </Page>
   );
 }
