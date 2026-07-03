@@ -1,16 +1,26 @@
 /**
- * Daily Produce Sales Report - v7
+ * Daily Produce Sales Report - v7.2
  *
- * v7 additions on top of v6:
+ * v7.2 additions on top of v7.1:
+ *   - Preflight gate badges moved from top of body to compact footer strip.
+ *   - When any gate is not green, a small banner appears above the headline
+ *     pointing readers to the gate strip at the foot of the email.
+ *
+ * v7.1 additions (kept):
+ *   - Sales-first headline: total sales is the big number; profit / margin /
+ *     SKUs sold are a compact secondary line.
+ *   - "What sold yesterday" top-10-by-revenue table above the actionable table.
+ *   - Inline SVG sparklines replace unicode block chars (fixes Outlook mobile
+ *     mojibake).
+ *   - <meta charset="utf-8"> in HTML head to prevent encoding drift.
+ *
+ * v7 additions on top of v6 (kept):
  *   1. Preflight gates G1..G9 (computed before email build)
- *   2. Data-health strip (small colored badges under headline)
- *   3. Profit-first headline (big yesterday profit number + Do today list)
- *   4. Actionable-only SKU table (with ACTION pills)
- *   5. Count Drift and Spoilage panels below actionable table
- *   6. 7-day sparklines (unicode block chars) for revenue + contribution
- *   7. Full audit CSV linked (if hosted) or attached (fallback)
- *   8. Preview mode via ?preview=1&to=<yc-email> (no CC, [v7 PREVIEW] prefix)
- *   9. Date override via ?date=YYYY-MM-DD (for backfill / preview)
+ *   2. Actionable-only SKU table (with ACTION pills)
+ *   3. Count Drift and Spoilage panels below actionable table
+ *   4. Full audit CSV linked (if hosted) or attached (fallback)
+ *   5. Preview mode via ?preview=1&to=<yc-email> (no CC, [PREVIEW] prefix)
+ *   6. Date override via ?date=YYYY-MM-DD (for backfill / preview)
  *
  * Preserved from v6:
  *   - sold_qty = max(0, qty - loss_qty) so ring-then-loss doesn't double-count
@@ -1052,11 +1062,25 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
   }
   const actionable_table_rows = actionable_rows.map(actionable_row_html).join('');
 
-  // Data-health strip
-  const strip_html =
-    `<table border="0" cellpadding="0" cellspacing="0" style="margin:4px 0 14px 0"><tr>` +
+  // v7.2: Data-health strip moved to footer. Compact styling.
+  const gate_strip_footer_html =
+    `<div style="margin-top:22px;padding-top:12px;border-top:1px solid #eee">` +
+    `<div style="font-size:11px;color:#888;margin:0 0 6px 0">Preflight gates</div>` +
+    `<table border="0" cellpadding="0" cellspacing="0"><tr>` +
     gates.map(badgeHtml).join('') +
-    `</tr></table>`;
+    `</tr></table>` +
+    `</div>`;
+
+  // v7.2: Elevate a small banner to the top only when overall health is not green.
+  const health_banner_bg = overallColor === 'yellow' ? '#fffbe5' : '#fff5f5';
+  const health_banner_border = overallColor === 'yellow' ? '#c60' : '#a00';
+  const notGreenGates = gates.filter(g => g.color !== 'green');
+  const health_banner_html = overallColor !== 'green'
+    ? `<div style="margin:0 0 12px 0;padding:8px 12px;background:${health_banner_bg};border-left:4px solid ${health_banner_border};font-size:12px;color:#555">` +
+      `<b style="color:${health_banner_border}">Data health: ${overallColor}</b> &mdash; ` +
+      `${notGreenGates.map(g => esc(g.id)).join(', ')} not green. See preflight strip at bottom of email for detail.` +
+      `</div>`
+    : '';
 
   // Profit-first headline
   const profit_cents_total = Math.round(contrib_total * 100);
@@ -1153,10 +1177,9 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
 
   const html_body = `<html><head><meta charset="utf-8"></head><body style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;max-width:820px">
 ${preview_banner_html}
+${health_banner_html}
 <h2 style="margin:0 0 4px 0">PRODUCE SALES &mdash; ${esc(date_us)}</h2>
 <div style="color:#666;margin-bottom:6px">${esc(weekday_label)}</div>
-
-${strip_html}
 
 ${headline_html}
 
@@ -1176,9 +1199,11 @@ ${csv_link_or_note}
 &middot; Sales: Thrive POS. Inventory: live at email-send. Loss-tally: <code>loss_ledger</code>.<br>
 &middot; Net revenue excludes loss-tally spoilage; Discount 8 (owner consumption) re-attributed to full retail.<br>
 &middot; Contribution = net revenue &minus; COGS (COGS recomputed from catalog default cost).<br>
-&middot; Preflight gates run before build; a yellow strip indicator means partial-degradation.<br>
-&middot; Delivery: Resend. Report engine: v7.
+&middot; Preflight gates run before build; badges below show per-gate status.<br>
+&middot; Delivery: Resend. Report engine: v7.2.
 </div>
+
+${gate_strip_footer_html}
 </body></html>`;
 
   const _do_today_lines = do_today.length ? do_today.map(s => `  - ${s}`).join('\n') : '  (nothing flagged)';
@@ -1220,7 +1245,7 @@ ${csv_link_or_note}
     headers: {
       Authorization: `Bearer ${RESEND_KEY}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'natures-storehouse-produce-report/7.1 (Node fetch)',
+      'User-Agent': 'natures-storehouse-produce-report/7.2 (Node fetch)',
       Accept: 'application/json',
     },
     body: JSON.stringify(payload),
@@ -1238,7 +1263,7 @@ ${csv_link_or_note}
   const resend_id = send_result.id;
 
   const summary = {
-    version: 'v7.1',
+    version: 'v7.2',
     preview: isPreview,
     resend_email_id: resend_id,
     from: FROM_ADDR,
@@ -1267,7 +1292,7 @@ ${csv_link_or_note}
     stocktake_route_exists: stocktakeExists,
     sparklines_shown: showSparks,
   };
-  console.log('=== SUMMARY v7 ===');
+  console.log('=== SUMMARY v7.2 ===');
   console.log(JSON.stringify(summary, null, 2));
 
   return NextResponse.json({ ok: true, ...summary });
