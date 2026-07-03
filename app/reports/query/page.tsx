@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { Page } from '@/components/ui/page';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { QueryInterface } from '@/components/query-interface';
 import { createClient } from '@/lib/supabase/server';
@@ -54,7 +55,7 @@ GROUP BY 1
 ORDER BY revenue DESC`;
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       <div>
         <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
           Custom Query
@@ -176,6 +177,6 @@ ORDER BY revenue DESC`;
           </div>
         </CardContent>
       </Card>
-    </div>
+    </Page>
   );
 }

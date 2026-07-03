@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import { Page } from '@/components/ui/page';
 import { getCleanupReport, type CleanupItem, type CleanupSection } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 
@@ -66,7 +67,7 @@ export default async function InventoryCleanupPage() {
   const totalIssues = sections.reduce((s, x) => s + x.items.length, 0);
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       <div>
         <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
           Inventory Cleanup
@@ -108,6 +109,6 @@ export default async function InventoryCleanupPage() {
           </CardContent>
         </Card>
       ))}
-    </div>
+    </Page>
   );
 }

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { Page } from '@/components/ui/page';
 import { KPICard } from '@/components/kpi-card';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getKPIData, getShiftAnalysisData } from '@/lib/data';
@@ -63,7 +64,7 @@ export default async function DashboardPage() {
     .map((h) => formatHour(h.hour));
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       {/* Page title */}
       <div>
         <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
@@ -226,6 +227,6 @@ export default async function DashboardPage() {
           </Card>
         </div>
       </div>
-    </div>
+    </Page>
   );
 }

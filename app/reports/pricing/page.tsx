@@ -1,4 +1,5 @@
 import type React from 'react';
+import { Page } from '@/components/ui/page';
 import { createClient } from '@/lib/supabase/server';
 import { getProducePricing, type ProducePrice } from '@/lib/thrive';
 import type { CostSource } from '@/lib/inventory-cost';
@@ -60,7 +61,7 @@ export default async function ProducePricingPage({
     s + (r.recommendation !== 'hold' ? (r.optimalPrice - r.nowPrice) * r.totalUnits90d / 3 : 0), 0);
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       <div>
         <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
           Produce Price Analysis
@@ -173,6 +174,6 @@ export default async function ProducePricingPage({
           </div>
         </CardContent>
       </Card>
-    </div>
+    </Page>
   );
 }

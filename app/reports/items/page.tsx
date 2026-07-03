@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import { Page } from '@/components/ui/page';
 import { createClient } from '@/lib/supabase/server';
 import { getItemSales, getDepartmentSales, getLatestSaleDate, resolveSalesWindow, type DepartmentSales, type ItemSales } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -66,7 +67,7 @@ export default async function ItemSalesPage({
   const totalItems = fullStats.units;
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
@@ -146,7 +147,7 @@ export default async function ItemSalesPage({
           )}
         </CardContent>
       </Card>
-    </div>
+    </Page>
   );
 }
 

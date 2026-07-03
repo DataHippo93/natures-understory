@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import { Page } from '@/components/ui/page';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getEbtFlags, type EbtFlag } from '@/lib/thrive';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -60,7 +61,7 @@ export default async function EbtAuditPage({
   const cashiers = [...byCashier.entries()].sort((a, b) => b[1].count - a[1].count);
 
   return (
-    <div className="space-y-6 max-w-6xl">
+    <Page>
       <div>
         <h1 className="text-2xl font-bold uppercase tracking-wider" style={{ fontFamily: 'var(--font-josefin)', color: 'var(--gold)' }}>
           EBT Sale Audit
@@ -162,6 +163,6 @@ export default async function EbtAuditPage({
           </div>
         </CardContent>
       </Card>
-    </div>
+    </Page>
   );
 }
