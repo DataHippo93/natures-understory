@@ -132,7 +132,7 @@ function CoolerCard({ cooler }: { cooler: CoolerStatus }) {
       style={{ background: 'var(--forest)', border: `1px solid ${cooler.state === 'alert' ? meta.border : 'var(--forest-mid)'}` }}
     >
       <div className="flex items-start justify-between gap-2">
-        <Link href={} className="min-w-0 group">
+        <Link href={`/coolers/${encodeURIComponent(config.entity_id)}`} className="min-w-0 group">
           <p className="text-sm font-bold group-hover:underline" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
             {config.display_name} →
           </p>
