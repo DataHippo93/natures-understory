@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation';
+import Link from 'next/link';
 import { Page } from '@/components/ui/page';
 import { createClient } from '@/lib/supabase/server';
 import { getCoolerDashboard, OUT_OF_RANGE_ALERT_MINUTES, type CoolerStatus, type CoolerState } from '@/lib/coolers';
@@ -131,12 +132,12 @@ function CoolerCard({ cooler }: { cooler: CoolerStatus }) {
       style={{ background: 'var(--forest)', border: `1px solid ${cooler.state === 'alert' ? meta.border : 'var(--forest-mid)'}` }}
     >
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="text-sm font-bold" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
-            {config.display_name}
+        <Link href={`/coolers/${encodeURIComponent(config.entity_id)}`} className="min-w-0 group">
+          <p className="text-sm font-bold group-hover:underline" style={{ color: 'var(--cream)', fontFamily: 'var(--font-josefin)' }}>
+            {config.display_name} →
           </p>
           <p className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{config.entity_id}</p>
-        </div>
+        </Link>
         <span
           className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest whitespace-nowrap"
           style={{ background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, fontFamily: 'var(--font-josefin)' }}
