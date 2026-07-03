@@ -182,7 +182,7 @@ export function Sidebar({ userEmail }: SidebarProps) {
           onClick={() => setOpen((v) => !v)}
           aria-label={open ? 'Close menu' : 'Open menu'}
           aria-expanded={open}
-          className="flex h-9 w-9 items-center justify-center rounded-md"
+          className="u-tap-target flex items-center justify-center rounded-md"
           style={{ color: 'var(--cream)', border: '1px solid var(--forest-mid)' }}
         >
           {open ? (
@@ -387,7 +387,7 @@ export function Sidebar({ userEmail }: SidebarProps) {
         <form action="/api/auth/sign-out" method="POST">
           <button
             type="submit"
-            className="w-full rounded-md px-3 py-1.5 text-left text-xs font-medium transition-colors"
+            className="w-full rounded-md px-3 py-2.5 text-left text-xs font-medium transition-colors"
             style={{ color: 'var(--sage)', border: '1px solid var(--forest-mid)' }}
             onMouseEnter={(e) => {
               (e.currentTarget as HTMLElement).style.color = 'var(--cream)';

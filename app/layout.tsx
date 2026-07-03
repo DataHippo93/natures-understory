@@ -1,7 +1,7 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Josefin_Sans, Montserrat } from 'next/font/google';
 import './globals.css';
-import { Sidebar } from '@/components/sidebar';
+import { AppShell } from '@/components/ui/app-shell';
 import { createClient } from '@/lib/supabase/server';
 
 const josefinSans = Josefin_Sans({
@@ -27,6 +27,16 @@ export const metadata: Metadata = {
   },
 };
 
+// Explicit viewport export — Next 15+ splits this out of the metadata
+// object. Without it iOS renders the app at desktop scale on phones.
+// viewport-fit=cover enables safe-area-inset-* (notch / home-indicator).
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+  themeColor: '#161009',
+};
+
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
@@ -37,18 +47,7 @@ export default async function RootLayout({
     <html lang="en" className={`${josefinSans.variable} ${montserrat.variable} h-full`}>
       <body className="h-full" style={{ background: 'var(--forest-dark)', color: 'var(--cream)' }}>
         {user ? (
-          <>
-            <Sidebar userEmail={user.email} />
-            {/* Main content: offset by sidebar on desktop, by the mobile top bar on phones */}
-            <div className="lg:ml-56 min-h-screen flex flex-col pt-14 lg:pt-0">
-              <main className="flex-1 p-4 sm:p-6 lg:p-8">
-                {children}
-              </main>
-              <footer className="px-6 py-3 text-xs lg:px-8" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--forest-mid)' }}>
-                Nature&apos;s Storehouse · Canton, NY · Internal use only
-              </footer>
-            </div>
-          </>
+          <AppShell userEmail={user.email}>{children}</AppShell>
         ) : (
           // Signed-out (login page): no app chrome.
           <div className="min-h-screen flex flex-col">
