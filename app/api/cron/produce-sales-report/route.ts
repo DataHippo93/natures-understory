@@ -1,5 +1,11 @@
 /**
- * Daily Produce Sales Report - v7.2
+ * Daily Produce Sales Report - v7.3
+ *
+ * v7.3 changes on top of v7.2:
+ *   - Header naming: leads with "Yesterday's Produce Sales" so the reader
+ *     immediately sees the data date, not the send date.
+ *   - Subject line uses short weekday + M/D + "(yesterday)" for the same reason.
+ *   - No logic changes.
  *
  * v7.2 additions on top of v7.1:
  *   - Preflight gate badges moved from top of body to compact footer strip.
@@ -296,6 +302,9 @@ export async function GET(req: NextRequest) {
   const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const weekday_label = `${WEEKDAY_NAMES[yday_dt.getUTCDay()]}, ${MONTH_NAMES[yday_dt.getUTCMonth()]} ${D}, ${Y}`;
   const date_us = `${M}/${D}/${Y}`;
+  const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const short_weekday = WEEKDAY_SHORT[yday_dt.getUTCDay()];
+  const date_short = `${M}/${D}`;
   console.log(`[+] v7 Report date: ${yesterday} (${weekday_label}) preview=${isPreview}`);
 
   // 7-day baseline range (yesterday-6 .. yesterday)
@@ -1094,7 +1103,7 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
     : `<div style="margin-top:16px;color:#0a7"><b>Do today:</b> nothing flagged &mdash; produce is clean.</div>`;
 
   const headline_html =
-    `<div style="margin:16px 0 4px 0;font-size:13px;color:#555">Yesterday's Produce Sales</div>` +
+    `<div style="margin:16px 0 0 0;font-size:11px;color:#888">Net revenue</div>` +
     `<div style="font-size:34px;font-weight:bold;color:#111;line-height:1.1">${usd(Math.round(net_rev * 100))}</div>` +
     `<div style="color:#666;font-size:12px;margin-top:4px">Profit <span style="color:${profit_color}">${usd(profit_cents_total)}</span> &middot; Margin ${fmtPctSigned(contrib_pct)} &middot; ${skus_sold} SKUs sold</div>` +
     spark_line_html +
@@ -1178,8 +1187,8 @@ ${gates.map(g => `<tr${g.outcome === 'hold' ? ' bgcolor="#fff5f5"' : ''}><td>${e
   const html_body = `<html><head><meta charset="utf-8"></head><body style="font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;max-width:820px">
 ${preview_banner_html}
 ${health_banner_html}
-<h2 style="margin:0 0 4px 0">PRODUCE SALES &mdash; ${esc(date_us)}</h2>
-<div style="color:#666;margin-bottom:6px">${esc(weekday_label)}</div>
+<h1 style="margin:0 0 2px 0;font-size:22px;line-height:1.15">Yesterday&rsquo;s Produce Sales</h1>
+<div style="color:#666;margin-bottom:6px;font-size:13px">${esc(weekday_label)}</div>
 
 ${headline_html}
 
@@ -1200,7 +1209,7 @@ ${csv_link_or_note}
 &middot; Net revenue excludes loss-tally spoilage; Discount 8 (owner consumption) re-attributed to full retail.<br>
 &middot; Contribution = net revenue &minus; COGS (COGS recomputed from catalog default cost).<br>
 &middot; Preflight gates run before build; badges below show per-gate status.<br>
-&middot; Delivery: Resend. Report engine: v7.2.
+&middot; Delivery: Resend. Report engine: v7.3.
 </div>
 
 ${gate_strip_footer_html}
@@ -1208,7 +1217,7 @@ ${gate_strip_footer_html}
 
   const _do_today_lines = do_today.length ? do_today.map(s => `  - ${s}`).join('\n') : '  (nothing flagged)';
   const plain_body =
-    `${isPreview ? '[v7 PREVIEW] ' : ''}PRODUCE SALES - ${date_us}\n${weekday_label}\n\n` +
+    `${isPreview ? '[v7 PREVIEW] ' : ''}Yesterday's Produce Sales\n${weekday_label}\n\n` +
     `Yesterday's Produce Sales: ${usd(Math.round(net_rev * 100))}\n` +
     `Profit: ${usd(profit_cents_total)}   Margin: ${fmtPctSigned(contrib_pct)}   SKUs sold: ${skus_sold}\n` +
     (showSparks ? `Trend (7d) - see HTML view for chart\n` : '') +
@@ -1218,8 +1227,7 @@ ${gate_strip_footer_html}
     `\nFull audit CSV ${csvHosted ? `at ${csvMirrorUrl}` : 'attached to this email.'}\n`;
 
   // ---------- SEND ----------
-  const subjectDate = date_us;
-  const subject = `${isPreview ? '[v7 PREVIEW] ' : ''}Produce Sales - ${subjectDate}${overallColor === 'yellow' ? ' (yellow health)' : ''}`;
+  const subject = `${isPreview ? '[v7 PREVIEW] ' : ''}Produce Sales — ${short_weekday} ${date_short} (yesterday)${overallColor === 'yellow' ? ' (yellow health)' : ''}`;
 
   const finalTo = isPreview && toOverride ? [toOverride] : RECIPIENTS.to;
   const finalCc = isPreview ? undefined : RECIPIENTS.cc;
@@ -1263,7 +1271,7 @@ ${gate_strip_footer_html}
   const resend_id = send_result.id;
 
   const summary = {
-    version: 'v7.2',
+    version: 'v7.3',
     preview: isPreview,
     resend_email_id: resend_id,
     from: FROM_ADDR,
@@ -1292,7 +1300,7 @@ ${gate_strip_footer_html}
     stocktake_route_exists: stocktakeExists,
     sparklines_shown: showSparks,
   };
-  console.log('=== SUMMARY v7.2 ===');
+  console.log('=== SUMMARY v7.3 ===');
   console.log(JSON.stringify(summary, null, 2));
 
   return NextResponse.json({ ok: true, ...summary });
