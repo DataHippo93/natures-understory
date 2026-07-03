@@ -1,28 +1,28 @@
 @import "tailwindcss";
 
 :root {
-  /* Earth / bark palette — forest understory */
-  --forest-darkest: #0c0906;   /* deep loam, forest floor in shadow */
-  --forest-dark:    #161009;   /* rich dark soil */
-  --forest:         #201710;   /* bark brown, main surface */
-  --forest-mid:     #2e2016;   /* medium bark, borders */
-  --forest-hover:   #3a2b1c;   /* lighter bark, hover state */
-  --forest-light:   #6b5040;   /* weathered driftwood, muted elements */
+  /* Earth / bark palette - forest understory */
+  --forest-darkest: #0c0906;
+  --forest-dark:    #161009;
+  --forest:         #201710;
+  --forest-mid:     #2e2016;
+  --forest-hover:   #3a2b1c;
+  --forest-light:   #6b5040;
 
-  /* Amber — dappled sunlight filtering through the canopy */
+  /* Amber - dappled sunlight */
   --gold:           #c4923a;
   --gold-dim:       rgba(196, 146, 58, 0.15);
   --gold-border:    rgba(196, 146, 58, 0.3);
 
-  /* Text — warm parchment tones */
-  --cream:          #e8d5b8;   /* warm parchment */
-  --sage:           #8fa872;   /* lichen / fern */
-  --text-muted:     #7a6a52;   /* weathered earth */
+  /* Text - warm parchment tones */
+  --cream:          #e8d5b8;
+  --sage:           #8fa872;
+  --text-muted:     #7a6a52;
 
-  /* Status — naturalistic, not neon */
-  --good:           #7aaa62;   /* healthy plant green */
-  --warn:           #c4923a;   /* amber, same as gold */
-  --bad:            #b06060;   /* brick / dried blood */
+  /* Status */
+  --good:           #7aaa62;
+  --warn:           #c4923a;
+  --bad:            #b06060;
 
   --background: var(--forest-dark);
   --foreground: var(--cream);
@@ -35,11 +35,48 @@
   --font-heading: var(--font-josefin);
 }
 
+/* Mobile-safe base. text-size-adjust keeps iOS Safari from resizing text
+ * when the device rotates; 16px base blocks the zoom-on-focus that iOS
+ * applies to any <input> whose computed font-size is < 16px. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
   background: var(--forest-dark);
   color: var(--cream);
   font-family: var(--font-montserrat), system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-x: hidden;
 }
+
+/* Shared responsive utilities. Any new page should reach for these rather
+ * than reinventing sizing. See CONTRIBUTING_MOBILE.md at the repo root. */
+
+/* Minimum 44x44 tap target - Apple HIG / WCAG 2.5.5 baseline. */
+.u-tap-target { min-width: 44px; min-height: 44px; }
+
+/* Form input baseline. font-size:16px prevents the automatic iOS Safari
+ * zoom-on-focus; padding meets the tap-target minimum. */
+.u-input {
+  font-size: 16px;
+  line-height: 1.25;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.375rem;
+  min-height: 44px;
+  outline: none;
+}
+
+.u-input:focus { border-color: var(--gold); }
+
+/* Safe-area helpers for the iOS notch and home indicator. */
+.u-safe-x {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.u-safe-bottom { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
