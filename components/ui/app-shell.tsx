@@ -2,6 +2,7 @@ import { Sidebar } from '@/components/sidebar';
 
 interface AppShellProps {
   userEmail?: string | null;
+  userRole?: string | null;
   children: React.ReactNode;
 }
 
@@ -11,10 +12,10 @@ interface AppShellProps {
  * indicator, and a responsive main container. Every page renders its
  * content inside; layout concerns (offsets, safe area, chrome) live here.
  */
-export function AppShell({ userEmail, children }: AppShellProps) {
+export function AppShell({ userEmail, userRole, children }: AppShellProps) {
   return (
     <>
-      <Sidebar userEmail={userEmail} />
+      <Sidebar userEmail={userEmail} userRole={userRole} />
       <div
         className="lg:ml-56 min-h-screen flex flex-col pt-14 lg:pt-0"
         style={{

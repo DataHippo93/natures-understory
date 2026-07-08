@@ -11,6 +11,7 @@ const roleColor = (role: UserRole) => {
     case 'agm':             return { bg: 'rgba(122,170,98,0.1)',   text: '#9ab884',  border: 'rgba(122,170,98,0.2)' };
     case 'store_associate': return { bg: 'rgba(232,213,184,0.06)', text: '#a8956e',  border: 'rgba(232,213,184,0.15)' };
     case 'kitchen':         return { bg: 'rgba(176,96,96,0.12)',   text: '#b06060',  border: 'rgba(176,96,96,0.25)' };
+    case 'wholesale_manager': return { bg: 'rgba(96,146,176,0.12)', text: '#6092b0', border: 'rgba(96,146,176,0.25)' };
   }
 };
 
