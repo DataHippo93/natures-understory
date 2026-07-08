@@ -7,7 +7,22 @@ import { cn } from '@/lib/utils';
 
 interface SidebarProps {
   userEmail?: string | null;
+  userRole?: string | null;
 }
+
+const wholesaleItem = {
+  href: '/wholesale',
+  label: 'Wholesale Pricing',
+  icon: (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+      <path fillRule="evenodd" d="M5.5 3A2.5 2.5 0 0 0 3 5.5v2.879a2.5 2.5 0 0 0 .732 1.767l6.5 6.5a2.5 2.5 0 0 0 3.536 0l2.878-2.878a2.5 2.5 0 0 0 0-3.536l-6.5-6.5A2.5 2.5 0 0 0 8.38 3H5.5ZM6 7a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clipRule="evenodd" />
+      <path d="M14.5 2.75a.75.75 0 0 1 1.5 0v1.25h1.25a.75.75 0 0 1 0 1.5H16v1.25a.75.75 0 0 1-1.5 0V5.5h-1.25a.75.75 0 0 1 0-1.5h1.25V2.75Z" />
+    </svg>
+  ),
+};
+
+// Roles that see the Wholesale section alongside the regular nav.
+const WHOLESALE_NAV_ROLES = ['admin', 'gm', 'agm'];
 
 const sections = [
   {
@@ -151,9 +166,12 @@ const comingSoon = [
   { label: 'Settings', icon: '⚙️' },
 ];
 
-export function Sidebar({ userEmail }: SidebarProps) {
+export function Sidebar({ userEmail, userRole }: SidebarProps) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  // Wholesale managers see ONLY the wholesale module (spec: role scoped to /wholesale/*).
+  const wholesaleOnly = userRole === 'wholesale_manager';
+  const showWholesale = wholesaleOnly || WHOLESALE_NAV_ROLES.includes(userRole ?? '');
 
   // Close the mobile drawer whenever navigation happens
   useEffect(() => {
@@ -240,7 +258,12 @@ export function Sidebar({ userEmail }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-        {sections.map((section) => (
+        {(wholesaleOnly
+          ? [{ label: 'Wholesale', items: [wholesaleItem] }]
+          : showWholesale
+            ? [...sections, { label: 'Wholesale', items: [wholesaleItem] }]
+            : sections
+        ).map((section) => (
           <div key={section.label}>
             <p
               className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-widest"
@@ -296,6 +319,7 @@ export function Sidebar({ userEmail }: SidebarProps) {
         ))}
 
         {/* Reports */}
+        {!wholesaleOnly && (
         <div>
           <p
             className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-widest"
@@ -323,8 +347,10 @@ export function Sidebar({ userEmail }: SidebarProps) {
             })}
           </ul>
         </div>
+        )}
 
         {/* Admin */}
+        {!wholesaleOnly && (
         <div>
           <p
             className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-widest"
@@ -352,8 +378,10 @@ export function Sidebar({ userEmail }: SidebarProps) {
             })}
           </ul>
         </div>
+        )}
 
         {/* Coming soon */}
+        {!wholesaleOnly && (
         <div>
           <p
             className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-widest"
@@ -375,6 +403,7 @@ export function Sidebar({ userEmail }: SidebarProps) {
             ))}
           </ul>
         </div>
+        )}
       </nav>
 
       {/* User / Sign out */}

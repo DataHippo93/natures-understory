@@ -32,7 +32,8 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isLoginPage = request.nextUrl.pathname.startsWith('/login');
+  const pathname = request.nextUrl.pathname;
+  const isLoginPage = pathname.startsWith('/login');
 
   if (!user && !isLoginPage) {
     const loginUrl = request.nextUrl.clone();
@@ -40,10 +41,21 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
+  // Wholesale managers are scoped to /wholesale/* — cheap routing hint from the
+  // JWT metadata (authoritative checks live in lib/rbac.ts on every page/API).
+  const metaRole = (user?.user_metadata as Record<string, unknown> | undefined)?.role;
+  const isWholesaleManager = metaRole === 'wholesale_manager';
+
   if (user && isLoginPage) {
     const homeUrl = request.nextUrl.clone();
-    homeUrl.pathname = '/';
+    homeUrl.pathname = isWholesaleManager ? '/wholesale' : '/';
     return NextResponse.redirect(homeUrl);
+  }
+
+  if (user && isWholesaleManager && !pathname.startsWith('/wholesale') && !pathname.startsWith('/api')) {
+    const wholesaleUrl = request.nextUrl.clone();
+    wholesaleUrl.pathname = '/wholesale';
+    return NextResponse.redirect(wholesaleUrl);
   }
 
   return supabaseResponse;

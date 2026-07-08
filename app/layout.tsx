@@ -3,6 +3,17 @@ import { Josefin_Sans, Montserrat } from 'next/font/google';
 import './globals.css';
 import { AppShell } from '@/components/ui/app-shell';
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+
+// Authoritative role for nav visibility (user_profiles via service role —
+// same source lib/rbac.ts uses for page/API enforcement).
+async function getUserRole(userId: string | undefined): Promise<string | null> {
+  if (!userId) return null;
+  const admin = createAdminClient();
+  if (!admin) return null;
+  const { data } = await admin.from('user_profiles').select('role').eq('id', userId).single();
+  return data?.role ?? null;
+}
 
 const josefinSans = Josefin_Sans({
   variable: '--font-josefin',
@@ -42,12 +53,13 @@ export default async function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   const supabase = await createClient();
   const user = supabase ? (await supabase.auth.getUser()).data.user : null;
+  const userRole = await getUserRole(user?.id);
 
   return (
     <html lang="en" className={`${josefinSans.variable} ${montserrat.variable} h-full`}>
       <body className="h-full" style={{ background: 'var(--forest-dark)', color: 'var(--cream)' }}>
         {user ? (
-          <AppShell userEmail={user.email}>{children}</AppShell>
+          <AppShell userEmail={user.email} userRole={userRole}>{children}</AppShell>
         ) : (
           // Signed-out (login page): no app chrome.
           <div className="min-h-screen flex flex-col">

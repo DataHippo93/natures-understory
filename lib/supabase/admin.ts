@@ -8,7 +8,7 @@ export function createAdminClient() {
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
-export type UserRole = 'admin' | 'gm' | 'agm' | 'store_associate' | 'kitchen';
+export type UserRole = 'admin' | 'gm' | 'agm' | 'store_associate' | 'kitchen' | 'wholesale_manager';
 
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: 'Admin',
@@ -16,9 +16,10 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   agm: 'Asst. General Manager',
   store_associate: 'Store Associate',
   kitchen: 'Kitchen',
+  wholesale_manager: 'Wholesale Manager',
 };
 
-export const ROLE_ORDER: UserRole[] = ['admin', 'gm', 'agm', 'store_associate', 'kitchen'];
+export const ROLE_ORDER: UserRole[] = ['admin', 'gm', 'agm', 'store_associate', 'kitchen', 'wholesale_manager'];
 
 export interface UserProfile {
   id: string;
