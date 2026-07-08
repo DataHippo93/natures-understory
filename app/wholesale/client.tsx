@@ -8,6 +8,14 @@
 // v7.5 (2026-07-07): pricelist modal shows Copy plain text button; draft
 //   includes both htmlBody and textBody (backend renders symmetric Retail /
 //   Your price / Save% columns in both formats).
+// v7.6 (2026-07-08):
+//   - Recipients tab surfaces API errors instead of hanging on "Loading customers…"
+//     (backend now returns 200 with an `error` field on Shopify failure).
+//   - Pricelist generate button surfaces errors instead of silently doing
+//     nothing on a 502.
+//   - Export CSV button (item · variant · retail · tier1 · tier2 · wholesale_active)
+//     triggers a client-side download via <a download> — no server round-trip,
+//     no popup-blocked window.open.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -56,6 +64,7 @@ export default function WholesaleClient() {
   const [recipients, setRecipients] = useState<Recipient[] | null>(null);
   const [suppressedCount, setSuppressedCount] = useState<number>(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [recipientsError, setRecipientsError] = useState<string | null>(null);
   const [sync, setSync] = useState<Record<string, SyncState>>({});
   const [filter, setFilter] = useState<'active' | 'all'>('active');
   const [search, setSearch] = useState('');
@@ -65,18 +74,31 @@ export default function WholesaleClient() {
 
   const loadGrid = useCallback(async () => {
     setLoadError(null);
-    const res = await fetch('/api/wholesale/grid');
-    const data = await res.json();
-    if (!res.ok) setLoadError(data.error ?? 'Failed to load');
-    else setRows(data.rows);
+    try {
+      const res = await fetch('/api/wholesale/grid');
+      const data = await res.json();
+      if (!res.ok) setLoadError(data.error ?? `Failed to load (HTTP ${res.status})`);
+      else setRows(data.rows);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Failed to load');
+    }
   }, []);
 
   const loadRecipients = useCallback(async () => {
-    const res = await fetch('/api/wholesale/recipients');
-    const data = await res.json();
-    if (res.ok) {
+    setRecipientsError(null);
+    try {
+      const res = await fetch('/api/wholesale/recipients');
+      const data = await res.json();
+      // v7.6: route returns 200 with { recipients, suppressedCount, error? }
+      // even on Shopify failure. Populate what we can and surface the error.
       setRecipients(data.recipients ?? []);
       setSuppressedCount(data.suppressedCount ?? 0);
+      if (data.error) setRecipientsError(data.error);
+      else if (!res.ok) setRecipientsError(`Failed to load (HTTP ${res.status})`);
+    } catch (e) {
+      // Network / JSON error — still exit the loading state so we don't spin forever.
+      setRecipients([]);
+      setRecipientsError(e instanceof Error ? e.message : 'Failed to load recipients');
     }
   }, []);
 
@@ -175,11 +197,51 @@ export default function WholesaleClient() {
 
   const generate = useCallback(async (tier: Tier) => {
     setGenerating(tier);
-    const res = await fetch(`/api/wholesale/pricelist?tier=${tier}`);
-    const data = await res.json();
-    setGenerating(null);
-    if (res.ok) setDraft({ ...data, tier });
+    setLoadError(null);
+    try {
+      const res = await fetch(`/api/wholesale/pricelist?tier=${tier}`);
+      const data = await res.json();
+      setGenerating(null);
+      if (res.ok) setDraft({ ...data, tier });
+      else setLoadError(data.error ?? `Pricelist generation failed (HTTP ${res.status})`);
+    } catch (e) {
+      setGenerating(null);
+      setLoadError(e instanceof Error ? e.message : 'Pricelist generation failed');
+    }
   }, []);
+
+  // v7.6: client-side CSV export — no server round-trip, no popup-blocked
+  // window.open. Uses a synthetic <a download> anchor so the browser routes
+  // the file straight to the user's Downloads folder.
+  const exportCsv = useCallback(() => {
+    if (!rows || rows.length === 0) return;
+    const header = ['item', 'variant', 'retail', 'tier1', 'tier2', 'wholesale_active'];
+    const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const lines = [
+      header.join(','),
+      ...rows.map((r) =>
+        [
+          esc(r.productTitle),
+          esc(r.variantTitle === 'Default Title' ? '' : r.variantTitle),
+          r.retail,
+          r.tier1 ?? '',
+          r.tier2 ?? '',
+          r.wholesaleActive ? 'true' : 'false',
+        ].join(',')
+      ),
+    ];
+    // Prepend UTF-8 BOM so Excel opens accented characters correctly.
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `wholesale-pricelist-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [rows]);
 
   const badge = (key: string) => {
     const s = sync[key] ?? 'idle';
@@ -307,6 +369,20 @@ export default function WholesaleClient() {
             <div className="ml-auto flex gap-2">
               <button
                 type="button"
+                onClick={exportCsv}
+                disabled={!rows || rows.length === 0}
+                className="rounded-md px-3 py-1.5 text-sm font-medium"
+                style={{
+                  background: 'var(--sage)',
+                  color: '#082a1b',
+                  opacity: !rows || rows.length === 0 ? 0.5 : 1,
+                }}
+                title="Download all items as CSV (item, variant, retail, tier1, tier2, wholesale_active)"
+              >
+                Export CSV
+              </button>
+              <button
+                type="button"
                 onClick={() => generate('t1')}
                 disabled={generating !== null}
                 className="rounded-md px-3 py-1.5 text-sm font-medium"
@@ -388,6 +464,38 @@ export default function WholesaleClient() {
             edit the customer&apos;s Company assignment in Shopify Admin. Opt-outs
             (marketingState ≠ subscribed) are hidden.
           </p>
+          {recipientsError && (
+            <div
+              className="rounded-md px-4 py-3 text-sm"
+              style={{
+                background: 'rgba(176,96,96,0.12)',
+                color: '#b06060',
+                border: '1px solid rgba(176,96,96,0.25)',
+              }}
+            >
+              <div className="mb-1 font-medium">Couldn&apos;t load recipients from Shopify</div>
+              <div className="text-xs" style={{ color: '#c88888' }}>
+                {recipientsError}
+              </div>
+              <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                Most common cause: the LoPro app is missing the{' '}
+                <code style={{ color: 'var(--sage)' }}>read_companies</code> admin
+                scope, or the store has no B2B Companies configured yet. Grant the
+                scope in Shopify Admin → Apps → LoPro → API scopes, then{' '}
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={() => {
+                    setRecipients(null);
+                    loadRecipients();
+                  }}
+                >
+                  retry
+                </button>
+                .
+              </div>
+            </div>
+          )}
           {recipients === null ? (
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading customers…</p>
           ) : (
