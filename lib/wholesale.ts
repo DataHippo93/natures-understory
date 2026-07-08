@@ -42,6 +42,7 @@ export interface GridRow {
   variantId: string;
   variantTitle: string;
   retail: string;
+  lotCost: string | null; // v7.7: inventoryItem.unitCost.amount; null if unset
   tier1: string | null; // resolved price (FIXED override wins; else RELATIVE from catalog); null = variant not in list
   tier2: string | null;
   wholesaleActive: boolean; // per-variant
@@ -62,6 +63,7 @@ interface ProductsPage {
           title: string;
           price: string;
           metafield: { value: string } | null;
+          inventoryItem: { unitCost: { amount: string } | null } | null;
         }>;
       };
     }>;
@@ -125,6 +127,7 @@ export async function loadGrid(): Promise<GridRow[]> {
               nodes {
                 id title price
                 metafield(namespace: "custom", key: "wholesale_active") { value }
+                inventoryItem { unitCost { amount } }
               }
             }
           }
@@ -146,6 +149,7 @@ export async function loadGrid(): Promise<GridRow[]> {
           variantId: v.id,
           variantTitle: v.title,
           retail: v.price,
+          lotCost: v.inventoryItem?.unitCost?.amount ?? null,
           tier1: t1.get(v.id) ?? null,
           tier2: t2.get(v.id) ?? null,
           wholesaleActive: variantActive,

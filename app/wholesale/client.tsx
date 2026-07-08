@@ -8,6 +8,9 @@
 // v7.5 (2026-07-07): pricelist modal shows Copy plain text button; draft
 //   includes both htmlBody and textBody (backend renders symmetric Retail /
 //   Your price / Save% columns in both formats).
+// v7.7 (2026-07-08):
+//   - Lot Cost column between Retail and Tier 1 (from Shopify inventoryItem.unitCost).
+//     Included in CSV export.
 // v7.6 (2026-07-08):
 //   - Recipients tab surfaces API errors instead of hanging on "Loading customers…"
 //     (backend now returns 200 with an `error` field on Shopify failure).
@@ -27,6 +30,7 @@ interface GridRow {
   variantId: string;
   variantTitle: string;
   retail: string;
+  lotCost: string | null; // v7.7
   tier1: string | null;
   tier2: string | null;
   wholesaleActive: boolean;
@@ -215,7 +219,7 @@ export default function WholesaleClient() {
   // the file straight to the user's Downloads folder.
   const exportCsv = useCallback(() => {
     if (!rows || rows.length === 0) return;
-    const header = ['item', 'variant', 'retail', 'tier1', 'tier2', 'wholesale_active'];
+    const header = ['item', 'variant', 'retail', 'lot_cost', 'tier1', 'tier2', 'wholesale_active'];
     const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const lines = [
       header.join(','),
@@ -224,6 +228,7 @@ export default function WholesaleClient() {
           esc(r.productTitle),
           esc(r.variantTitle === 'Default Title' ? '' : r.variantTitle),
           r.retail,
+          r.lotCost ?? '',
           r.tier1 ?? '',
           r.tier2 ?? '',
           r.wholesaleActive ? 'true' : 'false',
@@ -413,6 +418,7 @@ export default function WholesaleClient() {
                     <th className="px-3 py-2 text-left font-medium">Item</th>
                     <th className="px-3 py-2 text-left font-medium">Variant</th>
                     <th className="px-3 py-2 text-right font-medium">Retail</th>
+                    <th className="px-3 py-2 text-right font-medium" title="Cost per item from Shopify variant inventoryItem.unitCost">Lot Cost</th>
                     <th className="px-3 py-2 text-right font-medium">Tier 1</th>
                     <th className="px-3 py-2 text-right font-medium">Tier 2</th>
                   </tr>
@@ -439,6 +445,7 @@ export default function WholesaleClient() {
                         {row.variantTitle === 'Default Title' ? '—' : row.variantTitle}
                       </td>
                       {cell(row, 'retail', fmt(row.retail), false)}
+                      <td className="whitespace-nowrap px-2 py-1 text-right" style={{ color: 'var(--text-muted)' }}>{row.lotCost !== null ? '$' + Number(row.lotCost).toFixed(2) : '—'}</td>
                       {cell(row, 't1', fmt(row.tier1), !row.wholesaleActive)}
                       {cell(row, 't2', fmt(row.tier2), !row.wholesaleActive)}
                     </tr>
