@@ -4,10 +4,10 @@
 // Optimistic edits with per-cell sync badges; commits are debounced 500ms and
 // hit /api/wholesale/* which enforce the wholesale_manager/admin role.
 //
-// v7.4 (2026-07-07):
-//   - Checkbox is per-VARIANT (was per-product).
-//   - Recipients tab is a read-only mirror of Shopify B2B Company assignments
-//     (managed in Shopify Admin → Companies → Locations → Catalogs).
+// v7.4 (2026-07-07): variant-level checkbox + read-only Recipients tab.
+// v7.5 (2026-07-07): pricelist modal shows Copy plain text button; draft
+//   includes both htmlBody and textBody (backend renders symmetric Retail /
+//   Your price / Save% columns in both formats).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -37,6 +37,7 @@ interface Recipient {
 interface PricelistDraft {
   subject: string;
   htmlBody: string;
+  textBody: string; // v7.5
   bcc: string[];
   itemCount: number;
 }
@@ -444,11 +445,19 @@ export default function WholesaleClient() {
                 onClick={() => {
                   const blob = new Blob([draft.htmlBody], { type: 'text/html' });
                   navigator.clipboard.write([
-                    new ClipboardItem({ 'text/html': blob, 'text/plain': new Blob([draft.htmlBody], { type: 'text/plain' }) }),
+                    new ClipboardItem({ 'text/html': blob, 'text/plain': new Blob([draft.textBody], { type: 'text/plain' }) }),
                   ]);
                 }}
               >
                 Copy email body
+              </button>
+              <button
+                type="button"
+                className="rounded-md px-3 py-1.5 text-sm font-medium"
+                style={{ background: 'var(--sage)', color: '#082a1b' }}
+                onClick={() => navigator.clipboard.writeText(draft.textBody)}
+              >
+                Copy plain text
               </button>
             </div>
             <p className="mb-2 text-xs" style={{ color: 'var(--text-muted)' }}>
