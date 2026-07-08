@@ -1,23 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { hasRole } from '@/lib/rbac';
-import { setWholesaleActive } from '@/lib/wholesale';
+import { setVariantWholesaleActive } from '@/lib/wholesale';
 
-// POST — toggle a product's wholesale membership (metafield + publications + prices)
+// POST — flip a single variant's wholesale_active flag (v7.4: variant-level).
+// Body: { variantId, active }.
 export async function POST(req: NextRequest) {
   const session = await hasRole(['wholesale_manager', 'admin']);
   if (!session) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
 
-  const body = (await req.json()) as {
-    productId: string;
-    variantIds: string[];
-    active: boolean;
-  };
-  if (!body.productId || !Array.isArray(body.variantIds) || typeof body.active !== 'boolean') {
+  const body = (await req.json()) as { variantId: string; active: boolean };
+  if (!body.variantId || typeof body.active !== 'boolean') {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
   }
 
   try {
-    await setWholesaleActive(body.productId, body.variantIds, body.active);
+    await setVariantWholesaleActive(body.variantId, body.active);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return NextResponse.json(

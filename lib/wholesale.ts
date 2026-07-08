@@ -1,14 +1,19 @@
-// Wholesale pricing data layer — all reads/writes against the LoPro store.
-// Server-only. See docs/wholesale_module.md for the B2B model this drives.
+// Wholesale pricing data layer — LoPro store. Server-only.
 //
 // Tier model (non-Plus plan — catalogs route through B2B markets):
-//   company location → B2B market ("Wholesale Tier 1"/"Tier 2") → catalog → price list
-// Env: WHOLESALE_T1_PRICE_LIST_ID, WHOLESALE_T2_PRICE_LIST_ID,
-//      WHOLESALE_T1_PUBLICATION_ID, WHOLESALE_T2_PUBLICATION_ID
+//   Company Location → B2B market → catalog → price list
+// Env: WHOLESALE_T1_PRICE_LIST_ID, WHOLESALE_T2_PRICE_LIST_ID
+// Optional env: WHOLESALE_T1_CATALOG_ID, WHOLESALE_T2_CATALOG_ID
+//   (for recipient tier mapping; falls back to title match on "Tier 1"/"Tier 2")
 //
-// NOTE (2026-04 API): publishablePublish/Unpublish userErrors have NO `code`
-// field — request { field message } only. companyLocation.catalogs is always
-// empty on this plan; never rely on it.
+// v7.4 (2026-07-07):
+//   - Variant-level wholesale_active metafield (product-level kept as fallback
+//     during backfill).
+//   - Tier price fetch now surfaces RELATIVE-origin prices too (was FIXED-only,
+//     which showed blank when the tier price list uses a market catalog
+//     percentage adjustment instead of per-variant overrides).
+//   - Recipients auto-derived from Company Location catalog assignments +
+//     Company Contact customer records. Read-only; managed in Shopify Admin.
 
 import { shopifyGraphQL, assertNoUserErrors } from './shopify-lopro';
 
@@ -20,11 +25,15 @@ function priceListId(tier: Tier): string {
   return id;
 }
 
-function publicationIds(): string[] {
-  const t1 = process.env.WHOLESALE_T1_PUBLICATION_ID;
-  const t2 = process.env.WHOLESALE_T2_PUBLICATION_ID;
-  if (!t1 || !t2) throw new Error('Missing wholesale publication env vars');
-  return [t1, t2];
+function catalogTier(catalogId: string, catalogTitle: string): Tier | null {
+  const t1id = process.env.WHOLESALE_T1_CATALOG_ID;
+  const t2id = process.env.WHOLESALE_T2_CATALOG_ID;
+  if (t1id && catalogId === t1id) return 't1';
+  if (t2id && catalogId === t2id) return 't2';
+  const t = catalogTitle.toLowerCase();
+  if (t.includes('tier 1') || t.endsWith(' t1')) return 't1';
+  if (t.includes('tier 2') || t.endsWith(' t2')) return 't2';
+  return null;
 }
 
 export interface GridRow {
@@ -33,12 +42,12 @@ export interface GridRow {
   variantId: string;
   variantTitle: string;
   retail: string;
-  tier1: string | null; // FIXED price only; null = inherits retail
+  tier1: string | null; // resolved price (FIXED override wins; else RELATIVE from catalog); null = variant not in list
   tier2: string | null;
-  wholesaleActive: boolean;
+  wholesaleActive: boolean; // per-variant
 }
 
-// ---------- Reads ----------
+// ---------- Grid reads ----------
 
 interface ProductsPage {
   products: {
@@ -47,7 +56,14 @@ interface ProductsPage {
       id: string;
       title: string;
       metafield: { value: string } | null;
-      variants: { nodes: Array<{ id: string; title: string; price: string }> };
+      variants: {
+        nodes: Array<{
+          id: string;
+          title: string;
+          price: string;
+          metafield: { value: string } | null;
+        }>;
+      };
     }>;
   };
 }
@@ -61,7 +77,7 @@ interface PriceListPrices {
   };
 }
 
-async function fetchFixedPrices(tier: Tier): Promise<Map<string, string>> {
+async function fetchTierPrices(tier: Tier): Promise<Map<string, string>> {
   const map = new Map<string, string>();
   let cursor: string | null = null;
   do {
@@ -76,8 +92,13 @@ async function fetchFixedPrices(tier: Tier): Promise<Map<string, string>> {
       }`,
       { id: priceListId(tier), cursor }
     );
+    // v7.4: surface BOTH FIXED overrides and RELATIVE (market-adjusted)
+    // resolutions. Shopify already resolves the amount either way, so a
+    // simple `map.set` gives the right cell value. Previously we filtered
+    // `originType === 'FIXED'` and dropped every price when the catalog
+    // used a percentage adjustment, leaving the T1/T2 columns blank.
     for (const p of data.priceList.prices.nodes) {
-      if (p.originType === 'FIXED') map.set(p.variant.id, p.price.amount);
+      map.set(p.variant.id, p.price.amount);
     }
     cursor = data.priceList.prices.pageInfo.hasNextPage
       ? data.priceList.prices.pageInfo.endCursor
@@ -86,10 +107,10 @@ async function fetchFixedPrices(tier: Tier): Promise<Map<string, string>> {
   return map;
 }
 
-/** Full grid load: every product/variant + retail + both tier fixed prices + toggle. */
+/** Full grid load: one row per variant + retail + resolved tier prices + per-variant active flag. */
 export async function loadGrid(): Promise<GridRow[]> {
   const rows: GridRow[] = [];
-  const [t1, t2] = await Promise.all([fetchFixedPrices('t1'), fetchFixedPrices('t2')]);
+  const [t1, t2] = await Promise.all([fetchTierPrices('t1'), fetchTierPrices('t2')]);
 
   let cursor: string | null = null;
   do {
@@ -100,15 +121,25 @@ export async function loadGrid(): Promise<GridRow[]> {
           nodes {
             id title
             metafield(namespace: "custom", key: "wholesale_active") { value }
-            variants(first: 50) { nodes { id title price } }
+            variants(first: 50) {
+              nodes {
+                id title price
+                metafield(namespace: "custom", key: "wholesale_active") { value }
+              }
+            }
           }
         }
       }`,
       { cursor }
     );
     for (const p of data.products.nodes) {
-      const active = p.metafield?.value === 'true';
+      // Product flag is the backwards-compat fallback for variants that
+      // haven't been touched since v7.3 (when the flag lived only at product
+      // scope). Any explicit variant-level value overrides the product's.
+      const productActive = p.metafield?.value === 'true';
       for (const v of p.variants.nodes) {
+        const raw = v.metafield?.value;
+        const variantActive = raw === 'true' ? true : raw === 'false' ? false : productActive;
         rows.push({
           productId: p.id,
           productTitle: p.title,
@@ -117,7 +148,7 @@ export async function loadGrid(): Promise<GridRow[]> {
           retail: v.price,
           tier1: t1.get(v.id) ?? null,
           tier2: t2.get(v.id) ?? null,
-          wholesaleActive: active,
+          wholesaleActive: variantActive,
         });
       }
     }
@@ -127,7 +158,7 @@ export async function loadGrid(): Promise<GridRow[]> {
   return rows;
 }
 
-// ---------- Writes ----------
+// ---------- Price writes ----------
 
 export async function updateRetailPrice(productId: string, variantId: string, price: string): Promise<void> {
   const data = await shopifyGraphQL<{
@@ -175,28 +206,29 @@ export async function clearTierPrice(tier: Tier, variantId: string): Promise<voi
   assertNoUserErrors(data.priceListFixedPricesDelete.userErrors, `clearTierPrice(${tier})`);
 }
 
+// ---------- Toggle (v7.4: variant-level) ----------
+
 /**
- * Toggle a product's wholesale membership.
- * on:  metafield true + publish to both tier publications
- * off: metafield false + unpublish from both + clear its variants' fixed prices
+ * Toggle a single variant's wholesale_active metafield.
+ * on:  variant metafield -> 'true'
+ * off: variant metafield -> 'false' + clear any fixed tier overrides on that variant
+ *
+ * Product visibility in each tier catalog is managed in Shopify Admin
+ * (Product → Publishing → LoPro Wholesale Tier N). Not touched here — the
+ * previous product-level publish/unpublish path pointed at publication IDs
+ * that no longer exist on this store.
  */
-export async function setWholesaleActive(
-  productId: string,
-  variantIds: string[],
-  active: boolean
-): Promise<void> {
+export async function setVariantWholesaleActive(variantId: string, active: boolean): Promise<void> {
   const meta = await shopifyGraphQL<{
     metafieldsSet: { userErrors: Array<{ field?: string[]; message: string }> };
   }>(
     `mutation($metafields: [MetafieldsSetInput!]!) {
-      metafieldsSet(metafields: $metafields) {
-        userErrors { field message }
-      }
+      metafieldsSet(metafields: $metafields) { userErrors { field message } }
     }`,
     {
       metafields: [
         {
-          ownerId: productId,
+          ownerId: variantId,
           namespace: 'custom',
           key: 'wholesale_active',
           type: 'boolean',
@@ -205,88 +237,169 @@ export async function setWholesaleActive(
       ],
     }
   );
-  assertNoUserErrors(meta.metafieldsSet.userErrors, 'setWholesaleActive.metafieldsSet');
-
-  const pubMutation = active ? 'publishablePublish' : 'publishableUnpublish';
-  const pub = await shopifyGraphQL<
-    Record<string, { userErrors: Array<{ field?: string[]; message: string }> }>
-  >(
-    `mutation($id: ID!, $input: [PublicationInput!]!) {
-      ${pubMutation}(id: $id, input: $input) {
-        userErrors { field message }
-      }
-    }`,
-    { id: productId, input: publicationIds().map((publicationId) => ({ publicationId })) }
-  );
-  assertNoUserErrors(pub[pubMutation].userErrors, `setWholesaleActive.${pubMutation}`);
+  assertNoUserErrors(meta.metafieldsSet.userErrors, 'setVariantWholesaleActive.metafieldsSet');
 
   if (!active) {
     for (const tier of ['t1', 't2'] as Tier[]) {
-      for (const v of variantIds) {
-        try {
-          await clearTierPrice(tier, v);
-        } catch {
-          // variant had no fixed price in this list — fine
-        }
+      try {
+        await clearTierPrice(tier, variantId);
+      } catch {
+        // variant had no fixed override in this list — fine
       }
     }
   }
 }
 
-// ---------- Recipients (customer tags) ----------
+// ---------- Recipients (v7.4: auto from B2B Companies) ----------
 
 export interface Recipient {
   customerId: string;
   email: string;
   displayName: string;
+  companyName: string;
   t1: boolean;
   t2: boolean;
+  optedOut: boolean; // marketingState !== 'SUBSCRIBED'
 }
 
-const TAG: Record<Tier, string> = { t1: 'wholesale-list-t1', t2: 'wholesale-list-t2' };
+export interface RecipientList {
+  recipients: Recipient[]; // includes opted-out (client filters); sorted by company then email
+  suppressedCount: number; // opted-out count for the UI hint
+}
 
-export async function loadRecipients(): Promise<Recipient[]> {
-  const out: Recipient[] = [];
+interface CustomerNode {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  displayName: string;
+  email: string | null;
+  emailMarketingConsent: { marketingState: string } | null;
+}
+
+interface CompaniesPage {
+  companies: {
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: Array<{
+      id: string;
+      name: string;
+      locations: {
+        nodes: Array<{
+          id: string;
+          name: string;
+          catalogs: { nodes: Array<{ id: string; title: string }> };
+          roleAssignments: {
+            nodes: Array<{
+              companyContact: { customer: CustomerNode | null } | null;
+            }>;
+          };
+        }>;
+      };
+    }>;
+  };
+}
+
+let _recipientCache: { at: number; data: RecipientList } | null = null;
+const RECIPIENT_TTL_MS = 10 * 60 * 1000;
+
+/** Companies → Locations → catalog → Tier, joined with each Location's Company Contacts.
+ *  Memoized 10 min. */
+export async function loadRecipients(): Promise<RecipientList> {
+  if (_recipientCache && Date.now() - _recipientCache.at < RECIPIENT_TTL_MS) {
+    return _recipientCache.data;
+  }
+
+  const byCustomer = new Map<
+    string,
+    { c: CustomerNode; companyName: string; t1: boolean; t2: boolean }
+  >();
+
   let cursor: string | null = null;
   do {
-    const data: {
-      customers: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        nodes: Array<{ id: string; email: string | null; displayName: string; tags: string[] }>;
-      };
-    } = await shopifyGraphQL(
+    const data: CompaniesPage = await shopifyGraphQL<CompaniesPage>(
       `query($cursor: String) {
-        customers(first: 250, after: $cursor) {
+        companies(first: 50, after: $cursor) {
           pageInfo { hasNextPage endCursor }
-          nodes { id email displayName tags }
+          nodes {
+            id name
+            locations(first: 20) {
+              nodes {
+                id name
+                catalogs(first: 5) { nodes { id title } }
+                roleAssignments(first: 50) {
+                  nodes {
+                    companyContact {
+                      customer {
+                        id firstName lastName displayName email
+                        emailMarketingConsent { marketingState }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }`,
       { cursor }
     );
-    for (const c of data.customers.nodes) {
-      if (!c.email) continue;
-      out.push({
-        customerId: c.id,
-        email: c.email,
-        displayName: c.displayName,
-        t1: c.tags.includes(TAG.t1),
-        t2: c.tags.includes(TAG.t2),
-      });
+
+    for (const co of data.companies.nodes) {
+      for (const loc of co.locations.nodes) {
+        let locT1 = false;
+        let locT2 = false;
+        for (const cat of loc.catalogs.nodes) {
+          const t = catalogTier(cat.id, cat.title);
+          if (t === 't1') locT1 = true;
+          if (t === 't2') locT2 = true;
+        }
+        if (!locT1 && !locT2) continue;
+
+        for (const ra of loc.roleAssignments.nodes) {
+          const cust = ra.companyContact?.customer;
+          if (!cust?.email) continue;
+          const prior = byCustomer.get(cust.id);
+          if (prior) {
+            prior.t1 = prior.t1 || locT1;
+            prior.t2 = prior.t2 || locT2;
+          } else {
+            byCustomer.set(cust.id, { c: cust, companyName: co.name, t1: locT1, t2: locT2 });
+          }
+        }
+      }
     }
-    cursor = data.customers.pageInfo.hasNextPage ? data.customers.pageInfo.endCursor : null;
+    cursor = data.companies.pageInfo.hasNextPage ? data.companies.pageInfo.endCursor : null;
   } while (cursor);
-  return out;
+
+  const recipients: Recipient[] = [];
+  let suppressedCount = 0;
+  for (const { c, companyName, t1, t2 } of byCustomer.values()) {
+    const optedOut = (c.emailMarketingConsent?.marketingState ?? '') !== 'SUBSCRIBED';
+    if (optedOut) suppressedCount++;
+    recipients.push({
+      customerId: c.id,
+      email: (c.email ?? '').toLowerCase(),
+      displayName:
+        c.displayName ||
+        [c.firstName, c.lastName].filter(Boolean).join(' ') ||
+        c.email ||
+        '(unnamed)',
+      companyName,
+      t1,
+      t2,
+      optedOut,
+    });
+  }
+
+  recipients.sort(
+    (a, b) => a.companyName.localeCompare(b.companyName) || a.email.localeCompare(b.email)
+  );
+
+  const list: RecipientList = { recipients, suppressedCount };
+  _recipientCache = { at: Date.now(), data: list };
+  return list;
 }
 
-export async function setRecipientTag(customerId: string, tier: Tier, member: boolean): Promise<void> {
-  const mutation = member ? 'tagsAdd' : 'tagsRemove';
-  const data = await shopifyGraphQL<
-    Record<string, { userErrors: Array<{ field?: string[]; message: string }> }>
-  >(
-    `mutation($id: ID!, $tags: [String!]!) {
-      ${mutation}(id: $id, tags: $tags) { userErrors { field message } }
-    }`,
-    { id: customerId, tags: [TAG[tier]] }
-  );
-  assertNoUserErrors(data[mutation].userErrors, `setRecipientTag.${mutation}`);
+/** Bust the 10-min recipient cache. Used by admin ops that would race. */
+export function invalidateRecipientCache(): void {
+  _recipientCache = null;
 }

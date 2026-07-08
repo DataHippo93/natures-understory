@@ -1,8 +1,13 @@
 'use client';
 
-// Wholesale Pricing Manager — spreadsheet-fast grid + recipients + pricelists.
+// Wholesale Pricing Manager — spreadsheet-fast grid + auto-populated recipients + pricelists.
 // Optimistic edits with per-cell sync badges; commits are debounced 500ms and
 // hit /api/wholesale/* which enforce the wholesale_manager/admin role.
+//
+// v7.4 (2026-07-07):
+//   - Checkbox is per-VARIANT (was per-product).
+//   - Recipients tab is a read-only mirror of Shopify B2B Company assignments
+//     (managed in Shopify Admin → Companies → Locations → Catalogs).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -23,8 +28,10 @@ interface Recipient {
   customerId: string;
   email: string;
   displayName: string;
+  companyName: string;
   t1: boolean;
   t2: boolean;
+  optedOut: boolean;
 }
 
 interface PricelistDraft {
@@ -46,6 +53,7 @@ export default function WholesaleClient() {
   const [tab, setTab] = useState<'pricing' | 'recipients'>('pricing');
   const [rows, setRows] = useState<GridRow[] | null>(null);
   const [recipients, setRecipients] = useState<Recipient[] | null>(null);
+  const [suppressedCount, setSuppressedCount] = useState<number>(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sync, setSync] = useState<Record<string, SyncState>>({});
   const [filter, setFilter] = useState<'active' | 'all'>('active');
@@ -65,7 +73,10 @@ export default function WholesaleClient() {
   const loadRecipients = useCallback(async () => {
     const res = await fetch('/api/wholesale/recipients');
     const data = await res.json();
-    if (res.ok) setRecipients(data.recipients);
+    if (res.ok) {
+      setRecipients(data.recipients ?? []);
+      setSuppressedCount(data.suppressedCount ?? 0);
+    }
   }, []);
 
   useEffect(() => {
@@ -136,48 +147,26 @@ export default function WholesaleClient() {
     [setCell]
   );
 
-  const toggle = useCallback(
-    async (row: GridRow) => {
-      const next = !row.wholesaleActive;
-      const variantIds = rows!.filter((r) => r.productId === row.productId).map((r) => r.variantId);
-      setRows((rs) =>
-        rs!.map((r) => (r.productId === row.productId ? { ...r, wholesaleActive: next } : r))
-      );
-      const res = await fetch('/api/wholesale/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productId: row.productId, variantIds, active: next }),
-      });
-      if (!res.ok) {
-        setRows((rs) =>
-          rs!.map((r) => (r.productId === row.productId ? { ...r, wholesaleActive: !next } : r))
-        );
-      } else if (!next) {
-        // cleared tier prices server-side; reflect locally
-        setRows((rs) =>
-          rs!.map((r) => (r.productId === row.productId ? { ...r, tier1: null, tier2: null } : r))
-        );
-      }
-    },
-    [rows]
-  );
-
-  const toggleRecipient = useCallback(async (rec: Recipient, tier: Tier) => {
-    const member = tier === 't1' ? !rec.t1 : !rec.t2;
-    setRecipients((rs) =>
-      rs!.map((r) =>
-        r.customerId === rec.customerId ? { ...r, [tier]: member } : r
-      )
+  // v7.4: variant-level toggle. Only the current row flips.
+  const toggle = useCallback(async (row: GridRow) => {
+    const next = !row.wholesaleActive;
+    setRows((rs) =>
+      rs!.map((r) => (r.variantId === row.variantId ? { ...r, wholesaleActive: next } : r))
     );
-    const res = await fetch('/api/wholesale/recipients', {
-      method: 'PATCH',
+    const res = await fetch('/api/wholesale/toggle', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customerId: rec.customerId, tier, member }),
+      body: JSON.stringify({ variantId: row.variantId, active: next }),
     });
     if (!res.ok) {
-      setRecipients((rs) =>
+      setRows((rs) =>
+        rs!.map((r) => (r.variantId === row.variantId ? { ...r, wholesaleActive: !next } : r))
+      );
+    } else if (!next) {
+      // cleared tier prices server-side; reflect locally on THIS variant only
+      setRows((rs) =>
         rs!.map((r) =>
-          r.customerId === rec.customerId ? { ...r, [tier]: !member } : r
+          r.variantId === row.variantId ? { ...r, tier1: null, tier2: null } : r
         )
       );
     }
@@ -246,6 +235,33 @@ export default function WholesaleClient() {
       {label}
     </button>
   );
+
+  const tierList = (tier: Tier) => {
+    const label = tier === 't1' ? 'Tier 1' : 'Tier 2';
+    const filtered = (recipients ?? []).filter((r) => !r.optedOut && (tier === 't1' ? r.t1 : r.t2));
+    return (
+      <div className="flex-1 min-w-[280px]">
+        <h3 className="mb-2 text-sm font-semibold" style={{ color: 'var(--cream)' }}>
+          {label} recipients ({filtered.length})
+        </h3>
+        {filtered.length === 0 ? (
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            No subscribed customers on {label} catalog yet.
+          </p>
+        ) : (
+          <ul className="space-y-1 text-sm">
+            {filtered.map((r) => (
+              <li key={r.customerId} style={{ color: 'var(--cream)' }}>
+                <span>{r.displayName}</span>
+                <span style={{ color: 'var(--text-muted)' }}> — {r.email}</span>
+                <span style={{ color: 'var(--sage)' }}> — {r.companyName}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -338,7 +354,7 @@ export default function WholesaleClient() {
                           type="checkbox"
                           checked={row.wholesaleActive}
                           onChange={() => toggle(row)}
-                          aria-label={`${row.productTitle} wholesale active`}
+                          aria-label={`${row.productTitle} ${row.variantTitle} wholesale active`}
                         />
                       </td>
                       <td className="px-3 py-1" style={{ color: 'var(--cream)' }}>{row.productTitle}</td>
@@ -364,40 +380,25 @@ export default function WholesaleClient() {
       )}
 
       {tab === 'recipients' && (
-        <div className="space-y-3">
+        <div className="space-y-4">
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Who receives each pricelist email. Tags (`wholesale-list-t1` / `-t2`) live on the
-            Shopify customer record and can also be edited in Shopify admin.
+            Auto-mirrored from Shopify B2B: customers whose Company Location is
+            assigned to the Tier 1 or Tier 2 catalog. To add or remove a recipient,
+            edit the customer&apos;s Company assignment in Shopify Admin. Opt-outs
+            (marketingState ≠ subscribed) are hidden.
           </p>
           {recipients === null ? (
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading customers…</p>
           ) : (
-            <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid var(--forest-mid)' }}>
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr style={{ background: 'var(--forest-darkest)', color: 'var(--sage)' }}>
-                    <th className="px-3 py-2 text-left font-medium">Customer</th>
-                    <th className="px-3 py-2 text-left font-medium">Email</th>
-                    <th className="px-3 py-2 text-center font-medium">Tier 1 list</th>
-                    <th className="px-3 py-2 text-center font-medium">Tier 2 list</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recipients.map((rec) => (
-                    <tr key={rec.customerId} style={{ borderTop: '1px solid var(--forest-mid)' }}>
-                      <td className="px-3 py-1.5" style={{ color: 'var(--cream)' }}>{rec.displayName}</td>
-                      <td className="px-3 py-1.5" style={{ color: 'var(--text-muted)' }}>{rec.email}</td>
-                      <td className="px-3 py-1.5 text-center">
-                        <input type="checkbox" checked={rec.t1} onChange={() => toggleRecipient(rec, 't1')} />
-                      </td>
-                      <td className="px-3 py-1.5 text-center">
-                        <input type="checkbox" checked={rec.t2} onChange={() => toggleRecipient(rec, 't2')} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="flex flex-wrap gap-6">
+                {tierList('t1')}
+                {tierList('t2')}
+              </div>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Suppressed (opted out of email) — {suppressedCount} hidden
+              </p>
+            </>
           )}
         </div>
       )}

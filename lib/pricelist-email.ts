@@ -1,6 +1,7 @@
 // Tier pricelist generation: HTML email body + deduped BCC recipient list.
-// Item set = all wholesale_active items; price = tier FIXED price if set,
-// else retail. Recipients = customers tagged wholesale-list-<tier>.
+// Item set = all wholesale-active variants; price = tier price (FIXED override
+// or RELATIVE-adjusted) if set, else retail. Recipients = subscribed customers
+// on Company Locations assigned to the tier's catalog (see lib/wholesale.ts).
 // IMPORTANT: recipients go in BCC only, and the tier is never named in the
 // subject/body — a Tier 1 customer should never learn tiers exist.
 
@@ -18,7 +19,7 @@ function escapeHtml(s: string): string {
 }
 
 export async function generatePricelistDraft(tier: Tier): Promise<PricelistDraft> {
-  const [rows, recipients] = await Promise.all([loadGrid(), loadRecipients()]);
+  const [rows, list] = await Promise.all([loadGrid(), loadRecipients()]);
 
   const items = rows
     .filter((r) => r.wholesaleActive)
@@ -28,9 +29,12 @@ export async function generatePricelistDraft(tier: Tier): Promise<PricelistDraft
       price: Number(tier === 't1' ? (r.tier1 ?? r.retail) : (r.tier2 ?? r.retail)).toFixed(2),
     }));
 
+  // Only subscribed recipients on the tier's catalog. Dedup by email.
   const bcc = [
     ...new Set(
-      recipients.filter((c) => (tier === 't1' ? c.t1 : c.t2)).map((c) => c.email.toLowerCase())
+      list.recipients
+        .filter((c) => !c.optedOut && (tier === 't1' ? c.t1 : c.t2))
+        .map((c) => c.email)
     ),
   ];
 

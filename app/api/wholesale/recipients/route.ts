@@ -1,15 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { hasRole } from '@/lib/rbac';
-import { loadRecipients, setRecipientTag } from '@/lib/wholesale';
+import { loadRecipients } from '@/lib/wholesale';
 
-// GET — customers with their wholesale-list tag membership
+// GET — B2B Company members grouped by tier catalog (auto-mirrored from Shopify).
+// v7.4: read-only. Recipient list is now managed via Shopify Admin
+// (Company → Location → assign Catalog + customer subscription state).
 export async function GET() {
   const session = await hasRole(['wholesale_manager', 'admin']);
   if (!session) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
 
   try {
-    const recipients = await loadRecipients();
-    return NextResponse.json({ recipients });
+    const list = await loadRecipients();
+    return NextResponse.json(list);
   } catch (e) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : 'Failed to load recipients' },
@@ -18,23 +20,12 @@ export async function GET() {
   }
 }
 
-// PATCH — toggle a customer's wholesale-list-t1 / -t2 tag
-export async function PATCH(req: NextRequest) {
-  const session = await hasRole(['wholesale_manager', 'admin']);
-  if (!session) return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
-
-  const body = (await req.json()) as { customerId: string; tier: 't1' | 't2'; member: boolean };
-  if (!body.customerId || !['t1', 't2'].includes(body.tier) || typeof body.member !== 'boolean') {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
-  }
-
-  try {
-    await setRecipientTag(body.customerId, body.tier, body.member);
-    return NextResponse.json({ ok: true });
-  } catch (e) {
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : 'Tag update failed' },
-      { status: 502 }
-    );
-  }
+export async function PATCH() {
+  return NextResponse.json(
+    {
+      error:
+        'Recipients are now managed in Shopify Admin (Company → Location → Catalog assignment + customer email subscription). This endpoint is read-only as of v7.4.',
+    },
+    { status: 410 }
+  );
 }
