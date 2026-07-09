@@ -8,6 +8,14 @@
 // v7.5 (2026-07-07): pricelist modal shows Copy plain text button; draft
 //   includes both htmlBody and textBody (backend renders symmetric Retail /
 //   Your price / Save% columns in both formats).
+// v7.7.3 (2026-07-08):
+//   - Each row shows a small ↗ icon-link next to the Wholesale? checkbox that
+//     opens the Shopify Admin variant edit page in a new tab (Daniel's shortcut
+//     for editing product fields we don't surface here + checking inventory
+//     history). URL is generated server-side (see lib/wholesale.ts) so the
+//     handle stays in one place. Also added to the CSV export as trailing
+//     `shopify_admin_url` column.
+//
 // v7.7 (2026-07-08):
 //   - Lot Cost column between Retail and Tier 1 (from Shopify inventoryItem.unitCost).
 //     Included in CSV export.
@@ -34,6 +42,7 @@ interface GridRow {
   tier1: string | null;
   tier2: string | null;
   wholesaleActive: boolean;
+  adminUrl: string; // v7.7.3
 }
 
 interface Recipient {
@@ -219,7 +228,7 @@ export default function WholesaleClient() {
   // the file straight to the user's Downloads folder.
   const exportCsv = useCallback(() => {
     if (!rows || rows.length === 0) return;
-    const header = ['item', 'variant', 'retail', 'lot_cost', 'tier1', 'tier2', 'wholesale_active'];
+    const header = ['item', 'variant', 'retail', 'lot_cost', 'tier1', 'tier2', 'wholesale_active', 'shopify_admin_url'];
     const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const lines = [
       header.join(','),
@@ -232,6 +241,7 @@ export default function WholesaleClient() {
           r.tier1 ?? '',
           r.tier2 ?? '',
           r.wholesaleActive ? 'true' : 'false',
+          esc(r.adminUrl), // v7.7.3
         ].join(',')
       ),
     ];
@@ -382,7 +392,7 @@ export default function WholesaleClient() {
                   color: '#082a1b',
                   opacity: !rows || rows.length === 0 ? 0.5 : 1,
                 }}
-                title="Download all items as CSV (item, variant, retail, tier1, tier2, wholesale_active)"
+                title="Download all items as CSV (item, variant, retail, lot_cost, tier1, tier2, wholesale_active, shopify_admin_url)"
               >
                 Export CSV
               </button>
@@ -433,12 +443,33 @@ export default function WholesaleClient() {
                       }}
                     >
                       <td className="px-3 py-1 text-center">
-                        <input
-                          type="checkbox"
-                          checked={row.wholesaleActive}
-                          onChange={() => toggle(row)}
-                          aria-label={`${row.productTitle} ${row.variantTitle} wholesale active`}
-                        />
+                        <div className="inline-flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={row.wholesaleActive}
+                            onChange={() => toggle(row)}
+                            aria-label={`${row.productTitle} ${row.variantTitle} wholesale active`}
+                          />
+                          {/* v7.7.3: jump to Shopify Admin. Kept as an <a>, not a
+                              button, so middle-click / cmd-click work naturally. */}
+                          <a
+                            href={row.adminUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open in Shopify Admin"
+                            aria-label={`Open ${row.productTitle} in Shopify Admin`}
+                            className="text-sm leading-none"
+                            style={{
+                              color: 'var(--sage)',
+                              textDecoration: 'none',
+                              opacity: 0.7,
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                            onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.7')}
+                          >
+                            ↗
+                          </a>
+                        </div>
                       </td>
                       <td className="px-3 py-1" style={{ color: 'var(--cream)' }}>{row.productTitle}</td>
                       <td className="px-3 py-1" style={{ color: 'var(--text-muted)' }}>

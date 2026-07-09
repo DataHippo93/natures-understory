@@ -15,6 +15,15 @@
 //   - Recipients auto-derived from Company Location catalog assignments +
 //     Company Contact customer records. Read-only; managed in Shopify Admin.
 //
+// v7.7.3 (2026-07-08):
+//   - Each grid row now carries an `adminUrl` pointing at the Shopify Admin
+//     variant edit page, so Daniel can jump straight from a row to the
+//     product/variant to edit fields we don't surface here (media,
+//     description) or check inventory history. Handle derived from
+//     LOPRO_SHOPIFY_SHOP (stripping `.myshopify.com`); falls back to
+//     `natures-storehouse` if unset. Also exported as `shopify_admin_url`
+//     column in the CSV.
+//
 // v7.7.2 (2026-07-08):
 //   - Same 1038-cost throw was still hitting the Recipients tab AND both
 //     Pricelist buttons (the pricelist route composes loadGrid +
@@ -40,6 +49,23 @@ function priceListId(tier: Tier): string {
   return id;
 }
 
+// v7.7.3: derive Shopify Admin base URL from LOPRO_SHOPIFY_SHOP
+// (e.g. "0xdj5s-hq.myshopify.com" -> "https://admin.shopify.com/store/0xdj5s-hq").
+// Falls back to `natures-storehouse` if the env var is unset so pages don't
+// crash — they'd just land on a store the user might not have access to.
+function shopifyAdminBase(): string {
+  const shop = process.env.LOPRO_SHOPIFY_SHOP ?? '';
+  const handle = shop.replace(/\.myshopify\.com$/, '') || 'natures-storehouse';
+  return `https://admin.shopify.com/store/${handle}`;
+}
+
+function shopifyAdminUrl(productGid: string, variantGid: string): string {
+  // Shopify GIDs: gid://shopify/Product/12345678 -> keep everything after the last slash.
+  const p = productGid.slice(productGid.lastIndexOf('/') + 1);
+  const v = variantGid.slice(variantGid.lastIndexOf('/') + 1);
+  return `${shopifyAdminBase()}/products/${p}/variants/${v}`;
+}
+
 function catalogTier(catalogId: string, catalogTitle: string): Tier | null {
   const t1id = process.env.WHOLESALE_T1_CATALOG_ID;
   const t2id = process.env.WHOLESALE_T2_CATALOG_ID;
@@ -61,6 +87,7 @@ export interface GridRow {
   tier1: string | null; // resolved price (FIXED override wins; else RELATIVE from catalog); null = variant not in list
   tier2: string | null;
   wholesaleActive: boolean; // per-variant
+  adminUrl: string; // v7.7.3: Shopify Admin variant edit URL
 }
 
 // ---------- Grid reads ----------
@@ -168,6 +195,7 @@ export async function loadGrid(): Promise<GridRow[]> {
           tier1: t1.get(v.id) ?? null,
           tier2: t2.get(v.id) ?? null,
           wholesaleActive: variantActive,
+          adminUrl: shopifyAdminUrl(p.id, v.id),
         });
       }
     }
