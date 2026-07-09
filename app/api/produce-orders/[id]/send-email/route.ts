@@ -10,7 +10,7 @@ const CLARK_INBOX = 'cmaine@ycconsulting.biz';
 // domain verification. Custom domain (no-reply@natures-storehouse.com)
 // still fails DKIM check on this project's Resend workspace. Swap back
 // once natures-storehouse.com is added + verified in Resend.
-const FROM_ADDR = 'Nature\'s Understory <onboarding@resend.dev>';
+const FROM_ADDR = "Nature's Understory <no-reply@ycconsulting.biz>";
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await hasRole(['wholesale_manager', 'admin']);
