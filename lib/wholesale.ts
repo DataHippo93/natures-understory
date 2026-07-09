@@ -39,6 +39,14 @@
 //     the outer `first:` scales the cost down ~5× (est. ~208), well under the
 //     limit. Same total throughput — just more pages.
 //
+// v7.7.6 (2026-07-09):
+//   - Fix Shopify GraphQL error "Field 'orders' doesn't accept argument
+//     'query'" — that arg only exists on QueryRoot.orders, not on the nested
+//     Company.orders connection. The v7.7.5 balances query was failing the
+//     whole recipients fetch, leaving the Recipients tab empty.
+//   - Now: fetch first 50 recent orders per company (sorted DESC), filter
+//     client-side by displayFinancialStatus !== 'PAID' and outstanding > 0.
+//
 // v7.7.5 (2026-07-08):
 //   - Recipient bug fix: contacts who are Company Contacts but not
 //     role-assigned at a specific Location were being dropped by the old
@@ -359,6 +367,10 @@ interface CompanyContactNode {
 
 interface OrderNode {
   totalOutstandingSet: { presentmentMoney: { amount: string } } | null;
+  // v7.7.6: nested Company.orders doesn't accept a  filter, so we
+  // fetch all recent orders and filter client-side. Anything not PAID with a
+  // positive outstanding balance counts.
+  displayFinancialStatus: string | null;
 }
 
 interface CompaniesPage {
@@ -432,9 +444,10 @@ export async function loadRecipients(): Promise<RecipientList> {
                 }
               }
             }
-            orders(first: 20, query: "-financial_status:paid") {
+            orders(first: 50, sortKey: CREATED_AT, reverse: true) {
               nodes {
                 totalOutstandingSet { presentmentMoney { amount } }
+                displayFinancialStatus
               }
             }
             locations(first: 10) {
@@ -476,10 +489,16 @@ export async function loadRecipients(): Promise<RecipientList> {
       // Sum outstanding balance across this company's unpaid orders.
       // presentmentMoney is a decimal string ("432.10"); parse -> Number for
       // summation, then toFixed(2) for a stable decimal-string output.
+      // v7.7.6: client-side filter (nested Company.orders can't accept a
+      // GraphQL  arg — that argument only exists on QueryRoot.orders).
+      // Skip PAID and skip zero/missing outstanding balances.
       let balance = 0;
       for (const o of co.orders.nodes) {
+        if (o.displayFinancialStatus === 'PAID') continue;
         const amt = o.totalOutstandingSet?.presentmentMoney?.amount;
-        if (amt) balance += Number(amt);
+        if (!amt) continue;
+        const n = Number(amt);
+        if (n > 0) balance += n;
       }
       const balanceStr = balance.toFixed(2);
       if (coT1) {
