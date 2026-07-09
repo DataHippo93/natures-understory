@@ -52,9 +52,18 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(homeUrl);
   }
 
-  if (user && isWholesaleManager && !pathname.startsWith('/wholesale') && !pathname.startsWith('/api')) {
+  // wholesale_manager is scoped to /wholesale (legacy alias) and /lopro/*
+  // (new namespace for wholesale-pricing + produce-orders). API routes are
+  // always allowed; page-level auth is enforced by lib/rbac.ts.
+  if (
+    user &&
+    isWholesaleManager &&
+    !pathname.startsWith('/wholesale') &&
+    !pathname.startsWith('/lopro') &&
+    !pathname.startsWith('/api')
+  ) {
     const wholesaleUrl = request.nextUrl.clone();
-    wholesaleUrl.pathname = '/wholesale';
+    wholesaleUrl.pathname = '/lopro/produce-orders';
     return NextResponse.redirect(wholesaleUrl);
   }
 
