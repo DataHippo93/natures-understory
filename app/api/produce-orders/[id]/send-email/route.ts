@@ -13,7 +13,7 @@ const CLARK_INBOX = 'cmaine@ycconsulting.biz';
 const FROM_ADDR = "Nature's Understory <no-reply@ycconsulting.biz>";
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const session = await hasRole(['wholesale_manager', 'admin']);
+  const session = await hasRole(['admin']);
   if (!session) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   const { id } = await ctx.params;
 

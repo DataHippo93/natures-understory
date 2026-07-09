@@ -41,8 +41,9 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  // Wholesale managers are scoped to /wholesale/* — cheap routing hint from the
-  // JWT metadata (authoritative checks live in lib/rbac.ts on every page/API).
+  // Wholesale managers are scoped to /wholesale/* + /lopro/* (excluding
+  // /lopro/produce-orders/*, which is admin-only). Cheap routing hint from
+  // JWT metadata; authoritative checks live in lib/rbac.ts on every page/API.
   const metaRole = (user?.user_metadata as Record<string, unknown> | undefined)?.role;
   const isWholesaleManager = metaRole === 'wholesale_manager';
 
@@ -52,19 +53,24 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(homeUrl);
   }
 
-  // wholesale_manager is scoped to /wholesale (legacy alias) and /lopro/*
-  // (new namespace for wholesale-pricing + produce-orders). API routes are
-  // always allowed; page-level auth is enforced by lib/rbac.ts.
-  if (
-    user &&
-    isWholesaleManager &&
-    !pathname.startsWith('/wholesale') &&
-    !pathname.startsWith('/lopro') &&
-    !pathname.startsWith('/api')
-  ) {
-    const wholesaleUrl = request.nextUrl.clone();
-    wholesaleUrl.pathname = '/lopro/produce-orders';
-    return NextResponse.redirect(wholesaleUrl);
+  // wholesale_manager scope:
+  //   allowed:  /wholesale/*, /lopro/* (except /lopro/produce-orders/*), /api/*
+  //   denied:   everything else — including /lopro/produce-orders/* which
+  //             was tightened to admin-only in v7.7.8a.
+  // API routes are always allowed at the proxy layer; page/API-level auth is
+  // enforced by lib/rbac.ts.
+  if (user && isWholesaleManager) {
+    const isProduceOrdersSurface = pathname.startsWith('/lopro/produce-orders');
+    const isAllowedSurface =
+      pathname.startsWith('/wholesale') ||
+      pathname.startsWith('/lopro') ||
+      pathname.startsWith('/api');
+
+    if (isProduceOrdersSurface || !isAllowedSurface) {
+      const wholesaleUrl = request.nextUrl.clone();
+      wholesaleUrl.pathname = '/wholesale';
+      return NextResponse.redirect(wholesaleUrl);
+    }
   }
 
   return supabaseResponse;

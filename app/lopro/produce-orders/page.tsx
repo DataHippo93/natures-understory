@@ -5,7 +5,7 @@ import ProduceOrdersClient from './client';
 export const dynamic = 'force-dynamic';
 
 export default async function ProduceOrdersPage() {
-  const session = await hasRole(['wholesale_manager', 'admin']);
+  const session = await hasRole(['admin']);
   if (!session) redirect('/');
   return <ProduceOrdersClient />;
 }

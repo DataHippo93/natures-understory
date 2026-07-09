@@ -20,7 +20,7 @@ import { buildMatchContext, matchLine } from '@/lib/produce/matcher';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const ALLOWED_ROLES = ['wholesale_manager', 'admin'] as const;
+const ALLOWED_ROLES = ['admin'] as const;
 
 function vendorDisplayToSlug(name: string): string {
   const norm = (name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');

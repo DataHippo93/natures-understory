@@ -3,8 +3,8 @@
 // GET  /api/produce-orders           → list recent orders grouped by vendor
 // POST /api/produce-orders           → create a draft order
 //
-// Auth: buying_manager or admin (produce ordering role; falls back to
-// wholesale_manager for now — same folks in practice).
+// Auth: admin only (produce ordering is admin-gated; wholesale_manager
+// role no longer applies here).
 
 import { NextResponse } from 'next/server';
 import { hasRole } from '@/lib/rbac';
@@ -12,7 +12,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_ROLES = ['wholesale_manager', 'admin'] as const;
+const ALLOWED_ROLES = ['admin'] as const;
 
 export async function GET() {
   const session = await hasRole([...ALLOWED_ROLES]);
