@@ -11,7 +11,7 @@ interface SidebarProps {
 }
 
 const wholesaleItem = {
-  href: '/wholesale',
+  href: '/lopro/wholesale-pricing',
   label: 'Wholesale Pricing',
   icon: (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">

@@ -38,6 +38,19 @@
 //     single-query cap, and the endpoint was throwing on every load. Dropping
 //     the outer `first:` scales the cost down ~5× (est. ~208), well under the
 //     limit. Same total throughput — just more pages.
+//
+// v7.7.5 (2026-07-08):
+//   - Recipient bug fix: contacts who are Company Contacts but not
+//     role-assigned at a specific Location were being dropped by the old
+//     `location.roleAssignments` -only traversal. loadRecipients now also
+//     walks `company.contacts` and unions the two sources. Tier flags for
+//     `company.contacts` -derived recipients use the union of all the
+//     company's location tier flags (a contact who can buy at ANY tier-N
+//     location is a valid tier-N pricelist recipient).
+//   - Account balances: new `tierBalances` field on RecipientList. Sums
+//     `totalOutstandingSet.presentmentMoney.amount` across each company's
+//     `orders(query: "-financial_status:paid")` and buckets by the
+//     company's tier flags. Rendered on the Recipients tab.
 
 import { shopifyGraphQL, assertNoUserErrors } from './shopify-lopro';
 
@@ -64,6 +77,12 @@ function shopifyAdminUrl(productGid: string, variantGid: string): string {
   const p = productGid.slice(productGid.lastIndexOf('/') + 1);
   const v = variantGid.slice(variantGid.lastIndexOf('/') + 1);
   return `${shopifyAdminBase()}/products/${p}/variants/${v}`;
+}
+
+// v7.7.5: Company admin URL (for the balance rows on the Recipients tab).
+function shopifyCompanyAdminUrl(companyGid: string): string {
+  const id = companyGid.slice(companyGid.lastIndexOf('/') + 1);
+  return `${shopifyAdminBase()}/companies/${id}`;
 }
 
 function catalogTier(catalogId: string, catalogTitle: string): Tier | null {
@@ -297,7 +316,7 @@ export async function setVariantWholesaleActive(variantId: string, active: boole
   }
 }
 
-// ---------- Recipients (v7.4: auto from B2B Companies) ----------
+// ---------- Recipients (v7.4: auto from B2B Companies; v7.7.5: contacts + balances) ----------
 
 export interface Recipient {
   customerId: string;
@@ -309,9 +328,20 @@ export interface Recipient {
   optedOut: boolean; // marketingState !== 'SUBSCRIBED'
 }
 
+// v7.7.5: per-company outstanding balance, bucketed by tier for the
+// Recipients-tab summary. Zero-balance entries are included so the client
+// can offer a "show 0-balance (N)" toggle.
+export interface TierBalance {
+  companyId: string;
+  companyName: string;
+  balance: string; // decimal-string USD, e.g. "432.10"; may be "0.00"
+  adminUrl: string;
+}
+
 export interface RecipientList {
   recipients: Recipient[]; // includes opted-out (client filters); sorted by company then email
   suppressedCount: number; // opted-out count for the UI hint
+  tierBalances: { t1: TierBalance[]; t2: TierBalance[] };
 }
 
 interface CustomerNode {
@@ -323,12 +353,30 @@ interface CustomerNode {
   emailMarketingConsent: { marketingState: string } | null;
 }
 
+interface CompanyContactNode {
+  customer: CustomerNode | null;
+}
+
+interface OrderNode {
+  totalOutstandingSet: { presentmentMoney: { amount: string } } | null;
+}
+
 interface CompaniesPage {
   companies: {
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
     nodes: Array<{
       id: string;
       name: string;
+      // v7.7.5: contacts at Company scope catches recipients who are
+      // Company Contacts but haven't been role-assigned to a specific
+      // location. The old `location.roleAssignments` -only traversal
+      // dropped them.
+      contacts: { nodes: Array<CompanyContactNode> };
+      // v7.7.5: outstanding balances. `-financial_status:paid` matches
+      // pending, partially_paid, unpaid, refunded, etc. totalOutstandingSet
+      // is what actually distinguishes "owe us money" from "already paid" —
+      // status alone can lag.
+      orders: { nodes: Array<OrderNode> };
       locations: {
         nodes: Array<{
           id: string;
@@ -336,7 +384,7 @@ interface CompaniesPage {
           catalogs: { nodes: Array<{ id: string; title: string }> };
           roleAssignments: {
             nodes: Array<{
-              companyContact: { customer: CustomerNode | null } | null;
+              companyContact: CompanyContactNode | null;
             }>;
           };
         }>;
@@ -351,7 +399,11 @@ const RECIPIENT_TTL_MS = 10 * 60 * 1000;
 /** Companies → Locations → catalog → Tier, joined with each Location's Company Contacts.
  *  Memoized 10 min.
  *  v7.7.2: page sizes trimmed (companies 50->25, locations 20->10,
- *  roleAssignments 50->20) to stay under Shopify's 1000-point cost cap. */
+ *  roleAssignments 50->20) to stay under Shopify's 1000-point cost cap.
+ *  v7.7.5: also walks `company.contacts` and `company.orders` (for tier
+ *  balance summaries). Companies inherit tier flags from the UNION of their
+ *  locations' tier catalog assignments — a Company Contact who can shop at
+ *  ANY tier-1 location is a valid tier-1 pricelist recipient. */
 export async function loadRecipients(): Promise<RecipientList> {
   if (_recipientCache && Date.now() - _recipientCache.at < RECIPIENT_TTL_MS) {
     return _recipientCache.data;
@@ -361,6 +413,8 @@ export async function loadRecipients(): Promise<RecipientList> {
     string,
     { c: CustomerNode; companyName: string; t1: boolean; t2: boolean }
   >();
+  const t1Balances: TierBalance[] = [];
+  const t2Balances: TierBalance[] = [];
 
   let cursor: string | null = null;
   do {
@@ -370,6 +424,19 @@ export async function loadRecipients(): Promise<RecipientList> {
           pageInfo { hasNextPage endCursor }
           nodes {
             id name
+            contacts(first: 30) {
+              nodes {
+                customer {
+                  id firstName lastName displayName email
+                  emailMarketingConsent { marketingState }
+                }
+              }
+            }
+            orders(first: 20, query: "-financial_status:paid") {
+              nodes {
+                totalOutstandingSet { presentmentMoney { amount } }
+              }
+            }
             locations(first: 10) {
               nodes {
                 id name
@@ -393,6 +460,65 @@ export async function loadRecipients(): Promise<RecipientList> {
     );
 
     for (const co of data.companies.nodes) {
+      // Company-level tier flags: union of all locations' tier catalog
+      // assignments. If ANY location has the Tier N catalog, we consider
+      // this company a Tier N wholesale account.
+      let coT1 = false;
+      let coT2 = false;
+      for (const loc of co.locations.nodes) {
+        for (const cat of loc.catalogs.nodes) {
+          const t = catalogTier(cat.id, cat.title);
+          if (t === 't1') coT1 = true;
+          if (t === 't2') coT2 = true;
+        }
+      }
+
+      // Sum outstanding balance across this company's unpaid orders.
+      // presentmentMoney is a decimal string ("432.10"); parse -> Number for
+      // summation, then toFixed(2) for a stable decimal-string output.
+      let balance = 0;
+      for (const o of co.orders.nodes) {
+        const amt = o.totalOutstandingSet?.presentmentMoney?.amount;
+        if (amt) balance += Number(amt);
+      }
+      const balanceStr = balance.toFixed(2);
+      if (coT1) {
+        t1Balances.push({
+          companyId: co.id,
+          companyName: co.name,
+          balance: balanceStr,
+          adminUrl: shopifyCompanyAdminUrl(co.id),
+        });
+      }
+      if (coT2) {
+        t2Balances.push({
+          companyId: co.id,
+          companyName: co.name,
+          balance: balanceStr,
+          adminUrl: shopifyCompanyAdminUrl(co.id),
+        });
+      }
+
+      // Recipients: union of (a) `company.contacts` and (b) each location's
+      // `roleAssignments.companyContact.customer`. Company Contacts get the
+      // company-wide tier flags; role-assigned contacts get the specific
+      // location's tier flags (which can be narrower than company-wide if
+      // catalogs vary between locations — rare, but supported).
+      const mergeCustomer = (cust: CustomerNode | null, t1: boolean, t2: boolean) => {
+        if (!cust?.email) return;
+        if (!t1 && !t2) return;
+        const prior = byCustomer.get(cust.id);
+        if (prior) {
+          prior.t1 = prior.t1 || t1;
+          prior.t2 = prior.t2 || t2;
+        } else {
+          byCustomer.set(cust.id, { c: cust, companyName: co.name, t1, t2 });
+        }
+      };
+
+      for (const contact of co.contacts.nodes) {
+        mergeCustomer(contact.customer, coT1, coT2);
+      }
       for (const loc of co.locations.nodes) {
         let locT1 = false;
         let locT2 = false;
@@ -401,18 +527,14 @@ export async function loadRecipients(): Promise<RecipientList> {
           if (t === 't1') locT1 = true;
           if (t === 't2') locT2 = true;
         }
-        if (!locT1 && !locT2) continue;
-
+        // Fall back to company-wide flags if the location has no explicit
+        // catalog assignment but the company does — this catches setups
+        // where catalogs are attached to Company scope rather than per
+        // Location. Belt-and-suspenders for hypothesis D.
+        const effT1 = locT1 || coT1;
+        const effT2 = locT2 || coT2;
         for (const ra of loc.roleAssignments.nodes) {
-          const cust = ra.companyContact?.customer;
-          if (!cust?.email) continue;
-          const prior = byCustomer.get(cust.id);
-          if (prior) {
-            prior.t1 = prior.t1 || locT1;
-            prior.t2 = prior.t2 || locT2;
-          } else {
-            byCustomer.set(cust.id, { c: cust, companyName: co.name, t1: locT1, t2: locT2 });
-          }
+          mergeCustomer(ra.companyContact?.customer ?? null, effT1, effT2);
         }
       }
     }
@@ -422,7 +544,7 @@ export async function loadRecipients(): Promise<RecipientList> {
   const recipients: Recipient[] = [];
   let suppressedCount = 0;
   for (const { c, companyName, t1, t2 } of byCustomer.values()) {
-    const optedOut = (c.emailMarketingConsent?.marketingState ?? '') !== 'SUBSCRIBED';
+    const optedOut = (c.emailMarketingConsent?.marketingState ?? '').toUpperCase() !== 'SUBSCRIBED';
     if (optedOut) suppressedCount++;
     recipients.push({
       customerId: c.id,
@@ -443,7 +565,16 @@ export async function loadRecipients(): Promise<RecipientList> {
     (a, b) => a.companyName.localeCompare(b.companyName) || a.email.localeCompare(b.email)
   );
 
-  const list: RecipientList = { recipients, suppressedCount };
+  const sortBalances = (arr: TierBalance[]) =>
+    arr.sort(
+      (a, b) => Number(b.balance) - Number(a.balance) || a.companyName.localeCompare(b.companyName)
+    );
+
+  const list: RecipientList = {
+    recipients,
+    suppressedCount,
+    tierBalances: { t1: sortBalances(t1Balances), t2: sortBalances(t2Balances) },
+  };
   _recipientCache = { at: Date.now(), data: list };
   return list;
 }
@@ -452,4 +583,3 @@ export async function loadRecipients(): Promise<RecipientList> {
 export function invalidateRecipientCache(): void {
   _recipientCache = null;
 }
-

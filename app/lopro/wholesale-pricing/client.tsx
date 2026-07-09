@@ -35,8 +35,19 @@
 //   - Export CSV button (item · variant · retail · tier1 · tier2 · wholesale_active)
 //     triggers a client-side download via <a download> — no server round-trip,
 //     no popup-blocked window.open.
+//
+// v7.7.5 (2026-07-08):
+//   - Recipients tab now shows Tier 1 + Tier 2 account balances (one row per
+//     wholesale Company, deep-linked to Shopify Admin) above the recipient
+//     lists. Companies with $0 outstanding are hidden by default behind a
+//     "show 0-balance (N)" toggle so the section stays focused on money owed.
+//   - Tab state is now synced to the URL (?tab=pricing|recipients) via
+//     `useSearchParams` + `router.replace`, so the Recipients view is
+//     bookmarkable and survives page reloads (previously always snapped back
+//     to Pricing on refresh).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 type Tier = 't1' | 't2';
 
@@ -46,11 +57,11 @@ interface GridRow {
   variantId: string;
   variantTitle: string;
   retail: string;
-  lotCost: string | null; // v7.7
+  lotCost: string | null;
   tier1: string | null;
   tier2: string | null;
   wholesaleActive: boolean;
-  adminUrl: string; // v7.7.3
+  adminUrl: string;
 }
 
 interface Recipient {
@@ -63,10 +74,18 @@ interface Recipient {
   optedOut: boolean;
 }
 
+// v7.7.5: outstanding balance summary for the Recipients tab.
+interface TierBalance {
+  companyId: string;
+  companyName: string;
+  balance: string;
+  adminUrl: string;
+}
+
 interface PricelistDraft {
   subject: string;
   htmlBody: string;
-  textBody: string; // v7.5
+  textBody: string;
   bcc: string[];
   itemCount: number;
 }
@@ -79,10 +98,24 @@ const PRICE_RE = /^\d+(\.\d{1,2})?$/;
 
 const fmt = (v: string | null) => (v === null || v === '' ? '' : Number(v).toFixed(2));
 
+// v7.7.5: US-locale money for balances ("$1,234.56"). Kept out of `fmt` above
+// so the pricing-grid inputs stay unformatted (users edit raw decimals).
+const money = (v: string) =>
+  Number(v).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+type TabId = 'pricing' | 'recipients';
+
 export default function WholesaleClient() {
-  const [tab, setTab] = useState<'pricing' | 'recipients'>('pricing');
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // v7.7.5: initial tab from URL. `useSearchParams` returns null during
+  // static prerender in some Next configs; fall back to 'pricing'.
+  const urlTab = (searchParams?.get('tab') ?? '') as TabId | '';
+  const initialTab: TabId = urlTab === 'recipients' ? 'recipients' : 'pricing';
+  const [tab, setTab] = useState<TabId>(initialTab);
   const [rows, setRows] = useState<GridRow[] | null>(null);
   const [recipients, setRecipients] = useState<Recipient[] | null>(null);
+  const [tierBalances, setTierBalances] = useState<{ t1: TierBalance[]; t2: TierBalance[] } | null>(null);
   const [suppressedCount, setSuppressedCount] = useState<number>(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [recipientsError, setRecipientsError] = useState<string | null>(null);
@@ -91,11 +124,27 @@ export default function WholesaleClient() {
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState<(PricelistDraft & { tier: Tier }) | null>(null);
   const [generating, setGenerating] = useState<Tier | null>(null);
+  // v7.7.5: show/hide $0 balance rows in the Recipients-tab balance section.
+  const [showZeroT1, setShowZeroT1] = useState(false);
+  const [showZeroT2, setShowZeroT2] = useState(false);
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  // v7.7.4: toast + robust clipboard helper. Both live at component scope
-  // because the pricelist modal is rendered from the same component tree.
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // v7.7.5: keep the URL in sync when the tab changes so the view is
+  // bookmarkable + refresh-stable. `router.replace` (not push) avoids
+  // polluting the browser back-stack for what's essentially a UI toggle.
+  const changeTab = useCallback(
+    (next: TabId) => {
+      setTab(next);
+      const params = new URLSearchParams(searchParams?.toString() ?? '');
+      if (next === 'pricing') params.delete('tab');
+      else params.set('tab', next);
+      const qs = params.toString();
+      router.replace(qs ? `?${qs}` : '?', { scroll: false });
+    },
+    [router, searchParams],
+  );
 
   const showToast = useCallback(
     (message: string, type: 'success' | 'error' = 'success') => {
@@ -106,8 +155,6 @@ export default function WholesaleClient() {
     [],
   );
 
-  // Async clipboard API with execCommand fallback for browsers/modal focus
-  // contexts where navigator.clipboard.writeText silently rejects.
   const copyToClipboard = useCallback(
     async (text: string, label: string) => {
       try {
@@ -150,15 +197,17 @@ export default function WholesaleClient() {
     try {
       const res = await fetch('/api/wholesale/recipients');
       const data = await res.json();
-      // v7.6: route returns 200 with { recipients, suppressedCount, error? }
-      // even on Shopify failure. Populate what we can and surface the error.
       setRecipients(data.recipients ?? []);
       setSuppressedCount(data.suppressedCount ?? 0);
+      // v7.7.5: balances arrive on the same payload. Default to empty
+      // arrays so the UI renders cleanly if the server didn't compute them
+      // (e.g. old cached response mid-deploy).
+      setTierBalances(data.tierBalances ?? { t1: [], t2: [] });
       if (data.error) setRecipientsError(data.error);
       else if (!res.ok) setRecipientsError(`Failed to load (HTTP ${res.status})`);
     } catch (e) {
-      // Network / JSON error — still exit the loading state so we don't spin forever.
       setRecipients([]);
+      setTierBalances({ t1: [], t2: [] });
       setRecipientsError(e instanceof Error ? e.message : 'Failed to load recipients');
     }
   }, []);
@@ -198,7 +247,7 @@ export default function WholesaleClient() {
         setCell(key, 'error');
         return;
       }
-      if (field === 'retail' && value === '') return; // retail can't be cleared
+      if (field === 'retail' && value === '') return;
 
       setRows((rs) =>
         rs!.map((r) =>
@@ -231,7 +280,6 @@ export default function WholesaleClient() {
     [setCell]
   );
 
-  // v7.4: variant-level toggle. Only the current row flips.
   const toggle = useCallback(async (row: GridRow) => {
     const next = !row.wholesaleActive;
     setRows((rs) =>
@@ -247,7 +295,6 @@ export default function WholesaleClient() {
         rs!.map((r) => (r.variantId === row.variantId ? { ...r, wholesaleActive: !next } : r))
       );
     } else if (!next) {
-      // cleared tier prices server-side; reflect locally on THIS variant only
       setRows((rs) =>
         rs!.map((r) =>
           r.variantId === row.variantId ? { ...r, tier1: null, tier2: null } : r
@@ -271,9 +318,6 @@ export default function WholesaleClient() {
     }
   }, []);
 
-  // v7.6: client-side CSV export — no server round-trip, no popup-blocked
-  // window.open. Uses a synthetic <a download> anchor so the browser routes
-  // the file straight to the user's Downloads folder.
   const exportCsv = useCallback(() => {
     if (!rows || rows.length === 0) return;
     const header = ['item', 'variant', 'retail', 'lot_cost', 'tier1', 'tier2', 'wholesale_active', 'shopify_admin_url'];
@@ -289,11 +333,10 @@ export default function WholesaleClient() {
           r.tier1 ?? '',
           r.tier2 ?? '',
           r.wholesaleActive ? 'true' : 'false',
-          esc(r.adminUrl), // v7.7.3
+          esc(r.adminUrl),
         ].join(',')
       ),
     ];
-    // Prepend UTF-8 BOM so Excel opens accented characters correctly.
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -347,10 +390,10 @@ export default function WholesaleClient() {
     </td>
   );
 
-  const tabButton = (id: 'pricing' | 'recipients', label: string) => (
+  const tabButton = (id: TabId, label: string) => (
     <button
       type="button"
-      onClick={() => setTab(id)}
+      onClick={() => changeTab(id)}
       className="rounded-md px-3 py-1.5 text-sm font-medium"
       style={
         tab === id
@@ -384,6 +427,93 @@ export default function WholesaleClient() {
               </li>
             ))}
           </ul>
+        )}
+      </div>
+    );
+  };
+
+  // v7.7.5: per-tier balance section. Non-zero rows shown by default; a
+  // toggle reveals $0 companies (useful for audit / "who owes us anything").
+  const balanceSection = (tier: Tier) => {
+    const label = tier === 't1' ? 'Tier 1' : 'Tier 2';
+    const list = tierBalances?.[tier] ?? [];
+    const showZero = tier === 't1' ? showZeroT1 : showZeroT2;
+    const setShowZero = tier === 't1' ? setShowZeroT1 : setShowZeroT2;
+    const nonZero = list.filter((b) => Number(b.balance) > 0);
+    const zeroCount = list.length - nonZero.length;
+    const visibleRows = showZero ? list : nonZero;
+    const total = list.reduce((sum, b) => sum + Number(b.balance), 0);
+
+    return (
+      <div className="flex-1 min-w-[320px]">
+        <div className="mb-2 flex items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--cream)' }}>
+            {label} Account Balances
+          </h3>
+          <span className="text-xs" style={{ color: 'var(--sage)' }}>
+            Total {money(String(total))}
+          </span>
+        </div>
+        <div
+          className="rounded-md"
+          style={{ border: '1px solid var(--forest-mid)', background: 'var(--forest-darkest)' }}
+        >
+          {visibleRows.length === 0 ? (
+            <p className="p-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+              No {label} companies with an outstanding balance.
+            </p>
+          ) : (
+            <ul>
+              {visibleRows.map((b, i) => {
+                const isZero = Number(b.balance) === 0;
+                return (
+                  <li
+                    key={b.companyId}
+                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                    style={{
+                      borderTop: i === 0 ? 'none' : '1px solid var(--forest-mid)',
+                      opacity: isZero ? 0.6 : 1,
+                    }}
+                  >
+                    <span style={{ color: 'var(--cream)' }}>{b.companyName}</span>
+                    <span className="flex items-center gap-2">
+                      <span
+                        style={{
+                          color: isZero ? 'var(--text-muted)' : 'var(--cream)',
+                          fontVariantNumeric: 'tabular-nums',
+                        }}
+                      >
+                        {money(b.balance)}
+                      </span>
+                      <a
+                        href={b.adminUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={`Open ${b.companyName} in Shopify Admin`}
+                        aria-label={`Open ${b.companyName} in Shopify Admin`}
+                        className="text-sm leading-none"
+                        style={{ color: 'var(--sage)', textDecoration: 'none', opacity: 0.7 }}
+                        onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                        onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.7')}
+                      >
+                        ↗
+                      </a>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        {zeroCount > 0 && (
+          <button
+            type="button"
+            className="mt-1 text-xs underline"
+            style={{ color: 'var(--text-muted)' }}
+            onClick={() => setShowZero(!showZero)}
+          >
+            {showZero ? `hide 0-balance (${zeroCount})` : `show 0-balance (${zeroCount})`}
+          </button>
         )}
       </div>
     );
@@ -473,16 +603,14 @@ export default function WholesaleClient() {
                 className="w-full text-sm"
                 style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}
               >
-                {/* v7.7.4: fixed column widths so wider headers can't
-                    stretch the grid. Item is the only flex column. */}
                 <colgroup>
-                  <col style={{ width: '96px' }} />{/* Wholesale? */}
-                  <col />{/* Item — flexes */}
-                  <col style={{ width: '100px' }} />{/* Variant */}
-                  <col style={{ width: '96px' }} />{/* Retail */}
-                  <col style={{ width: '96px' }} />{/* Lot Cost */}
-                  <col style={{ width: '96px' }} />{/* Tier 1 */}
-                  <col style={{ width: '96px' }} />{/* Tier 2 */}
+                  <col style={{ width: '96px' }} />
+                  <col />
+                  <col style={{ width: '100px' }} />
+                  <col style={{ width: '96px' }} />
+                  <col style={{ width: '96px' }} />
+                  <col style={{ width: '96px' }} />
+                  <col style={{ width: '96px' }} />
                 </colgroup>
                 <thead>
                   <tr style={{ background: 'var(--forest-darkest)', color: 'var(--sage)' }}>
@@ -512,8 +640,6 @@ export default function WholesaleClient() {
                             onChange={() => toggle(row)}
                             aria-label={`${row.productTitle} ${row.variantTitle} wholesale active`}
                           />
-                          {/* v7.7.3: jump to Shopify Admin. Kept as an <a>, not a
-                              button, so middle-click / cmd-click work naturally. */}
                           <a
                             href={row.adminUrl}
                             target="_blank"
@@ -557,58 +683,87 @@ export default function WholesaleClient() {
       )}
 
       {tab === 'recipients' && (
-        <div className="space-y-4">
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            Auto-mirrored from Shopify B2B: customers whose Company Location is
-            assigned to the Tier 1 or Tier 2 catalog. To add or remove a recipient,
-            edit the customer&apos;s Company assignment in Shopify Admin. Opt-outs
-            (marketingState ≠ subscribed) are hidden.
-          </p>
-          {recipientsError && (
-            <div
-              className="rounded-md px-4 py-3 text-sm"
-              style={{
-                background: 'rgba(176,96,96,0.12)',
-                color: '#b06060',
-                border: '1px solid rgba(176,96,96,0.25)',
-              }}
-            >
-              <div className="mb-1 font-medium">Couldn&apos;t load recipients from Shopify</div>
-              <div className="text-xs" style={{ color: '#c88888' }}>
-                {recipientsError}
-              </div>
-              <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                Most common cause: the LoPro app is missing the{' '}
-                <code style={{ color: 'var(--sage)' }}>read_companies</code> admin
-                scope, or the store has no B2B Companies configured yet. Grant the
-                scope in Shopify Admin → Apps → LoPro → API scopes, then{' '}
-                <button
-                  type="button"
-                  className="underline"
-                  onClick={() => {
-                    setRecipients(null);
-                    loadRecipients();
-                  }}
+        <div className="space-y-6">
+          {tierBalances && (
+            <section className="space-y-3">
+              <div>
+                <h2
+                  className="text-sm font-semibold uppercase tracking-wide"
+                  style={{ color: 'var(--sage)' }}
                 >
-                  retry
-                </button>
-                .
+                  Account Balances
+                </h2>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Outstanding balance across each wholesale company&apos;s unpaid orders
+                  (pending / partially paid / unpaid). Sourced live from Shopify.
+                </p>
               </div>
-            </div>
-          )}
-          {recipients === null ? (
-            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading customers…</p>
-          ) : (
-            <>
               <div className="flex flex-wrap gap-6">
-                {tierList('t1')}
-                {tierList('t2')}
+                {balanceSection('t1')}
+                {balanceSection('t2')}
               </div>
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                Suppressed (opted out of email) — {suppressedCount} hidden
-              </p>
-            </>
+            </section>
           )}
+
+          <div className="space-y-3">
+            <h2
+              className="text-sm font-semibold uppercase tracking-wide"
+              style={{ color: 'var(--sage)' }}
+            >
+              Recipients
+            </h2>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Auto-mirrored from Shopify B2B: customers whose Company Location is
+              assigned to the Tier 1 or Tier 2 catalog. To add or remove a recipient,
+              edit the customer&apos;s Company assignment in Shopify Admin. Opt-outs
+              (marketingState ≠ subscribed) are hidden.
+            </p>
+            {recipientsError && (
+              <div
+                className="rounded-md px-4 py-3 text-sm"
+                style={{
+                  background: 'rgba(176,96,96,0.12)',
+                  color: '#b06060',
+                  border: '1px solid rgba(176,96,96,0.25)',
+                }}
+              >
+                <div className="mb-1 font-medium">Couldn&apos;t load recipients from Shopify</div>
+                <div className="text-xs" style={{ color: '#c88888' }}>
+                  {recipientsError}
+                </div>
+                <div className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Most common cause: the LoPro app is missing the{' '}
+                  <code style={{ color: 'var(--sage)' }}>read_companies</code> admin
+                  scope, or the store has no B2B Companies configured yet. Grant the
+                  scope in Shopify Admin → Apps → LoPro → API scopes, then{' '}
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => {
+                      setRecipients(null);
+                      loadRecipients();
+                    }}
+                  >
+                    retry
+                  </button>
+                  .
+                </div>
+              </div>
+            )}
+            {recipients === null ? (
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading customers…</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-6">
+                  {tierList('t1')}
+                  {tierList('t2')}
+                </div>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Suppressed (opted out of email) — {suppressedCount} hidden
+                </p>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -651,9 +806,6 @@ export default function WholesaleClient() {
                 className="rounded-md px-3 py-1.5 text-sm font-medium"
                 style={{ background: 'var(--gold)', color: '#082a1b' }}
                 onClick={async () => {
-                  // v7.7.4: rich HTML clipboard when the browser supports
-                  // ClipboardItem; falls back to plain-text write so the
-                  // button always produces a result + toast.
                   try {
                     if (
                       navigator.clipboard &&
@@ -691,13 +843,11 @@ export default function WholesaleClient() {
             </p>
             <div
               className="rounded-md bg-white p-3"
-              // Trusted content: generated server-side by lib/pricelist-email.ts with escaped titles.
               dangerouslySetInnerHTML={{ __html: draft.htmlBody }}
             />
           </div>
         </div>
       )}
-      {/* v7.7.4: toast for clipboard feedback (2s auto-dismiss). */}
       {toast && (
         <div
           role="status"
