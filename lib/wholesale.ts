@@ -39,6 +39,13 @@
 //     the outer `first:` scales the cost down ~5× (est. ~208), well under the
 //     limit. Same total throughput — just more pages.
 //
+// v7.7.7 (2026-07-09):
+//   - Drop company.orders selection entirely. LoPro app lacks read_orders
+//     scope, so Shopify returned ACCESS_DENIED which fails the whole query.
+//     v7.7.6 fixed the parse error but this second error was still 500ing.
+//   - Balances render as zero for all companies. Recipients list functional.
+//     To restore: add read_orders to LoPro scopes, re-mint token, revert.
+//
 // v7.7.6 (2026-07-09):
 //   - Fix Shopify GraphQL error "Field 'orders' doesn't accept argument
 //     'query'" — that arg only exists on QueryRoot.orders, not on the nested
@@ -365,13 +372,9 @@ interface CompanyContactNode {
   customer: CustomerNode | null;
 }
 
-interface OrderNode {
-  totalOutstandingSet: { presentmentMoney: { amount: string } } | null;
-  // v7.7.6: nested Company.orders doesn't accept a  filter, so we
-  // fetch all recent orders and filter client-side. Anything not PAID with a
-  // positive outstanding balance counts.
-  displayFinancialStatus: string | null;
-}
+// v7.7.7: OrderNode kept as never (company.orders removed pending
+// read_orders scope on the LoPro app).
+type OrderNode = never;
 
 interface CompaniesPage {
   companies: {
@@ -384,11 +387,8 @@ interface CompaniesPage {
       // location. The old `location.roleAssignments` -only traversal
       // dropped them.
       contacts: { nodes: Array<CompanyContactNode> };
-      // v7.7.5: outstanding balances. `-financial_status:paid` matches
-      // pending, partially_paid, unpaid, refunded, etc. totalOutstandingSet
-      // is what actually distinguishes "owe us money" from "already paid" —
-      // status alone can lag.
-      orders: { nodes: Array<OrderNode> };
+      // v7.7.7: outstanding balances disabled pending read_orders scope
+      // on LoPro app.
       locations: {
         nodes: Array<{
           id: string;
@@ -444,12 +444,6 @@ export async function loadRecipients(): Promise<RecipientList> {
                 }
               }
             }
-            orders(first: 50, sortKey: CREATED_AT, reverse: true) {
-              nodes {
-                totalOutstandingSet { presentmentMoney { amount } }
-                displayFinancialStatus
-              }
-            }
             locations(first: 10) {
               nodes {
                 id name
@@ -489,17 +483,8 @@ export async function loadRecipients(): Promise<RecipientList> {
       // Sum outstanding balance across this company's unpaid orders.
       // presentmentMoney is a decimal string ("432.10"); parse -> Number for
       // summation, then toFixed(2) for a stable decimal-string output.
-      // v7.7.6: client-side filter (nested Company.orders can't accept a
-      // GraphQL  arg — that argument only exists on QueryRoot.orders).
-      // Skip PAID and skip zero/missing outstanding balances.
-      let balance = 0;
-      for (const o of co.orders.nodes) {
-        if (o.displayFinancialStatus === 'PAID') continue;
-        const amt = o.totalOutstandingSet?.presentmentMoney?.amount;
-        if (!amt) continue;
-        const n = Number(amt);
-        if (n > 0) balance += n;
-      }
+      // v7.7.7: balance always 0 pending read_orders scope on LoPro app.
+      const balance = 0;
       const balanceStr = balance.toFixed(2);
       if (coT1) {
         t1Balances.push({
