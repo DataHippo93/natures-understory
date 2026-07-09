@@ -10,7 +10,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 export const dynamic = 'force-dynamic';
 
-const ROLES = ['buying_manager', 'wholesale_manager', 'admin'] as const;
+const ROLES = ['wholesale_manager', 'admin'] as const;
 
 interface LineInput {
   raw_line: string;

@@ -7,7 +7,7 @@ import { listProduceVendors } from '@/lib/produce-vendors';
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
-  const session = await hasRole(['buying_manager', 'wholesale_manager', 'admin']);
+  const session = await hasRole(['wholesale_manager', 'admin']);
   if (!session) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   try {
     const vendors = await listProduceVendors({ activeOnly: true });

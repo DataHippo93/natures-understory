@@ -12,7 +12,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_ROLES = ['buying_manager', 'wholesale_manager', 'admin'] as const;
+const ALLOWED_ROLES = ['wholesale_manager', 'admin'] as const;
 
 export async function GET() {
   const session = await hasRole([...ALLOWED_ROLES]);

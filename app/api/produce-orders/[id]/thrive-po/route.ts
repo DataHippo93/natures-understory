@@ -5,7 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 export const dynamic = 'force-dynamic';
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const session = await hasRole(['buying_manager', 'wholesale_manager', 'admin']);
+  const session = await hasRole(['wholesale_manager', 'admin']);
   if (!session) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   const { id } = await ctx.params;
 
