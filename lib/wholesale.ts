@@ -15,6 +15,14 @@
 //   - Recipients auto-derived from Company Location catalog assignments +
 //     Company Contact customer records. Read-only; managed in Shopify Admin.
 //
+// v7.7.2 (2026-07-08):
+//   - Same 1038-cost throw was still hitting the Recipients tab AND both
+//     Pricelist buttons (the pricelist route composes loadGrid +
+//     loadRecipients, so any over-budget query in loadRecipients breaks the
+//     tier email draft too). loadRecipients query trimmed: companies 50->25,
+//     locations 20->10, roleAssignments 50->20. catalogs stays at 5. Same
+//     total throughput via cursor pagination.
+//
 // v7.7.1 (2026-07-08):
 //   - Products page size 250 → 50. Adding `inventoryItem { unitCost { amount } }`
 //     in v7.7 pushed the products query cost to 1038, over Shopify's 1000-point
@@ -313,7 +321,9 @@ let _recipientCache: { at: number; data: RecipientList } | null = null;
 const RECIPIENT_TTL_MS = 10 * 60 * 1000;
 
 /** Companies → Locations → catalog → Tier, joined with each Location's Company Contacts.
- *  Memoized 10 min. */
+ *  Memoized 10 min.
+ *  v7.7.2: page sizes trimmed (companies 50->25, locations 20->10,
+ *  roleAssignments 50->20) to stay under Shopify's 1000-point cost cap. */
 export async function loadRecipients(): Promise<RecipientList> {
   if (_recipientCache && Date.now() - _recipientCache.at < RECIPIENT_TTL_MS) {
     return _recipientCache.data;
@@ -328,15 +338,15 @@ export async function loadRecipients(): Promise<RecipientList> {
   do {
     const data: CompaniesPage = await shopifyGraphQL<CompaniesPage>(
       `query($cursor: String) {
-        companies(first: 50, after: $cursor) {
+        companies(first: 25, after: $cursor) {
           pageInfo { hasNextPage endCursor }
           nodes {
             id name
-            locations(first: 20) {
+            locations(first: 10) {
               nodes {
                 id name
                 catalogs(first: 5) { nodes { id title } }
-                roleAssignments(first: 50) {
+                roleAssignments(first: 20) {
                   nodes {
                     companyContact {
                       customer {
