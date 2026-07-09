@@ -1,3 +1,6 @@
+// v7.7.8 (2026-07-09): produce ordering surface locked to `admin` role.
+// Daniel (wholesale_manager) is scoped to /lopro/wholesale-pricing only.
+
 import { NextResponse } from 'next/server';
 import { hasRole } from '@/lib/rbac';
 import { createAdminClient } from '@/lib/supabase/admin';

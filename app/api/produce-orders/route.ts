@@ -1,10 +1,13 @@
+// v7.7.8 (2026-07-09): produce ordering surface locked to `admin` role.
+// Daniel (wholesale_manager) is scoped to /lopro/wholesale-pricing only.
+
 // Produce Orders API — list + create.
 //
 // GET  /api/produce-orders           → list recent orders grouped by vendor
 // POST /api/produce-orders           → create a draft order
 //
-// Auth: admin only (produce ordering is admin-gated; wholesale_manager
-// role no longer applies here).
+// Auth: buying_manager or admin (produce ordering role; falls back to
+// wholesale_manager for now — same folks in practice).
 
 import { NextResponse } from 'next/server';
 import { hasRole } from '@/lib/rbac';

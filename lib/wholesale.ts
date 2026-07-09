@@ -39,6 +39,24 @@
 //     the outer `first:` scales the cost down ~5× (est. ~208), well under the
 //     limit. Same total throughput — just more pages.
 //
+// v7.7.8 (2026-07-09):
+//   - Recipients tab was still showing 0/0 even after v7.7.7 because
+//     `companyLocation.catalogs` returns an empty edge list on this store
+//     for the "Wholesale Tier 1" / "Wholesale Tier 2" MarketCatalogs. The
+//     Admin UI shows the catalog assigned at Company/Location level, but
+//     the assignment routes through Markets on non-Plus plans and the
+//     location.catalogs connection only enumerates CompanyLocationCatalogs
+//     (not MarketCatalogs). Confirmed live: companyLocation.catalogsCount
+//     = 0 for Nature's Storehouse even though the UI shows Tier 1.
+//   - Fix: (a) hardcode both known MarketCatalog GIDs into catalogTier()
+//     so the env vars are optional. (b) company-name-based fallback: any
+//     Company whose locations all return empty catalogs is matched against
+//     WHOLESALE_T1_COMPANY_NAME_HINTS / _T2_ env-var CSVs (defaults include
+//     the two known production companies + "tier 1"/"tier 2" substrings).
+//     (c) explicit WHOLESALE_T1_COMPANY_GIDS / _T2_ env-var lists win over
+//     everything else. Root cause diagnosed via v7.7.8 diagnostic; response
+//     body captured in commit message.
+//
 // v7.7.7 (2026-07-09):
 //   - Drop company.orders selection entirely. LoPro app lacks read_orders
 //     scope, so Shopify returned ACCESS_DENIED which fails the whole query.
@@ -100,15 +118,67 @@ function shopifyCompanyAdminUrl(companyGid: string): string {
   return `${shopifyAdminBase()}/companies/${id}`;
 }
 
+// v7.7.8: hardcoded MarketCatalog GIDs for the Nature's Storehouse LoPro
+// store (0xdj5s-hq). Env vars WHOLESALE_T1_CATALOG_ID / _T2_ still take
+// precedence — this is a floor so the mapping works even when Vercel envs
+// are unset.
+const T1_CATALOG_GID_DEFAULT = 'gid://shopify/MarketCatalog/155448869111';
+const T2_CATALOG_GID_DEFAULT = 'gid://shopify/MarketCatalog/155473641719';
+
 function catalogTier(catalogId: string, catalogTitle: string): Tier | null {
-  const t1id = process.env.WHOLESALE_T1_CATALOG_ID;
-  const t2id = process.env.WHOLESALE_T2_CATALOG_ID;
+  const t1id = process.env.WHOLESALE_T1_CATALOG_ID ?? T1_CATALOG_GID_DEFAULT;
+  const t2id = process.env.WHOLESALE_T2_CATALOG_ID ?? T2_CATALOG_GID_DEFAULT;
   if (t1id && catalogId === t1id) return 't1';
   if (t2id && catalogId === t2id) return 't2';
   const t = catalogTitle.toLowerCase();
   if (t.includes('tier 1') || t.endsWith(' t1')) return 't1';
   if (t.includes('tier 2') || t.endsWith(' t2')) return 't2';
   return null;
+}
+
+// v7.7.8: fallback tier detection for the case where a Company's locations
+// all report empty `catalogs` (MarketCatalog assignments don't surface
+// through location.catalogs). Order of precedence:
+//   1. WHOLESALE_T1_COMPANY_GIDS / _T2_ env-var CSV (exact GID match)
+//   2. WHOLESALE_T1_COMPANY_NAME_HINTS / _T2_ env-var CSV (case-insensitive
+//      substring match)
+//   3. Built-in hints: "tier 1"/"tier 2" substrings + "nature's storehouse"
+//      (production Tier 1 company on this store).
+// Returns { t1, t2 } — both true is allowed (rare but possible when a
+// company spans both tiers).
+function csvEnv(name: string): string[] {
+  return (process.env[name] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function companyTierFallback(
+  companyGid: string,
+  companyName: string
+): { t1: boolean; t2: boolean } {
+  const nameLower = companyName.toLowerCase();
+
+  const gidT1 = csvEnv('WHOLESALE_T1_COMPANY_GIDS');
+  const gidT2 = csvEnv('WHOLESALE_T2_COMPANY_GIDS');
+  if (gidT1.includes(companyGid) || gidT2.includes(companyGid)) {
+    return { t1: gidT1.includes(companyGid), t2: gidT2.includes(companyGid) };
+  }
+
+  const nameT1 = [
+    ...csvEnv('WHOLESALE_T1_COMPANY_NAME_HINTS'),
+    // built-in defaults for this store
+    'tier 1',
+    "nature's storehouse",
+  ].map((s) => s.toLowerCase());
+  const nameT2 = [
+    ...csvEnv('WHOLESALE_T2_COMPANY_NAME_HINTS'),
+    'tier 2',
+  ].map((s) => s.toLowerCase());
+
+  const t1 = nameT1.some((h) => h && nameLower.includes(h));
+  const t2 = nameT2.some((h) => h && nameLower.includes(h));
+  return { t1, t2 };
 }
 
 export interface GridRow {
@@ -479,6 +549,16 @@ export async function loadRecipients(): Promise<RecipientList> {
           if (t === 't2') coT2 = true;
         }
       }
+      // v7.7.8: MarketCatalog assignments (Wholesale Tier 1 / 2) don't
+      // enumerate through `companyLocation.catalogs` on non-Plus plans, so
+      // the loop above produces {false,false} on this store. Fall back to
+      // company GID + name hints when nothing surfaced. See
+      // companyTierFallback() for precedence rules.
+      if (!coT1 && !coT2) {
+        const fb = companyTierFallback(co.id, co.name);
+        coT1 = fb.t1;
+        coT2 = fb.t2;
+      }
 
       // Sum outstanding balance across this company's unpaid orders.
       // presentmentMoney is a decimal string ("432.10"); parse -> Number for
@@ -531,10 +611,10 @@ export async function loadRecipients(): Promise<RecipientList> {
           if (t === 't1') locT1 = true;
           if (t === 't2') locT2 = true;
         }
-        // Fall back to company-wide flags if the location has no explicit
-        // catalog assignment but the company does — this catches setups
-        // where catalogs are attached to Company scope rather than per
-        // Location. Belt-and-suspenders for hypothesis D.
+        // Fall back to company-wide flags (v7.7.8: which are themselves
+        // fallback-derived when the MarketCatalog case triggers). This is
+        // the belt-and-suspenders that keeps role-assigned contacts in
+        // the recipient list.
         const effT1 = locT1 || coT1;
         const effT2 = locT2 || coT2;
         for (const ra of loc.roleAssignments.nodes) {

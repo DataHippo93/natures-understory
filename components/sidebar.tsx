@@ -21,8 +21,23 @@ const wholesaleItem = {
   ),
 };
 
+// v7.7.8: produce-orders link is admin-only. Rendered inside the Wholesale
+// section for admins, hidden entirely for wholesale_manager.
+const produceOrdersItem = {
+  href: '/lopro/produce-orders',
+  label: 'Produce Orders',
+  icon: (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+      <path d="M2.879 7.121A3 3 0 0 0 7.05 2.95L5.464 4.536A1 1 0 1 1 4.05 3.121l1.586-1.585a3 3 0 1 0-4.243 4.243l1.243 1.243zM10.657 3.879a3 3 0 0 1 4.242 4.242l-1.585 1.586a1 1 0 0 1-1.415-1.414l1.586-1.586a1 1 0 0 0-1.414-1.414l-1.586 1.586a1 1 0 0 1-1.414-1.414l1.586-1.586zM17.05 12.879a3 3 0 0 0-4.171-4.172L11.293 10.293a1 1 0 0 0 1.414 1.414l1.586-1.586a1 1 0 0 1 1.414 1.414l-1.586 1.586a1 1 0 0 0 1.414 1.415l1.586-1.586zM8.05 17.05a3 3 0 0 1-4.242-4.243l1.585-1.585a1 1 0 0 1 1.415 1.414L5.222 14.222a1 1 0 1 0 1.414 1.414l1.585-1.585a1 1 0 0 1 1.415 1.414L8.05 17.05z" />
+    </svg>
+  ),
+};
+
 // Roles that see the Wholesale section alongside the regular nav.
 const WHOLESALE_NAV_ROLES = ['admin', 'gm', 'agm'];
+
+// v7.7.8: roles allowed to see the Produce Orders link. Admin-only.
+const PRODUCE_ORDERS_ROLES = ['admin'];
 
 const sections = [
   {
@@ -258,12 +273,19 @@ export function Sidebar({ userEmail, userRole }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
-        {(wholesaleOnly
-          ? [{ label: 'Wholesale', items: [wholesaleItem] }]
-          : showWholesale
-            ? [...sections, { label: 'Wholesale', items: [wholesaleItem] }]
-            : sections
-        ).map((section) => (
+        {(() => {
+          const showProduceOrders = PRODUCE_ORDERS_ROLES.includes(userRole ?? '');
+          const wholesaleItems = showProduceOrders
+            ? [wholesaleItem, produceOrdersItem]
+            : [wholesaleItem];
+          const wholesaleSection = { label: 'Wholesale', items: wholesaleItems };
+          const shownSections = wholesaleOnly
+            ? [wholesaleSection]
+            : showWholesale
+              ? [...sections, wholesaleSection]
+              : sections;
+          return shownSections;
+        })().map((section) => (
           <div key={section.label}>
             <p
               className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-widest"

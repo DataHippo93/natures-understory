@@ -1,3 +1,6 @@
+// v7.7.8 (2026-07-09): produce ordering surface locked to `admin` role.
+// Daniel (wholesale_manager) is scoped to /lopro/wholesale-pricing only.
+
 // Line items for a produce order.
 //
 // POST   /api/produce-orders/[id]/lines           — replace all lines (bulk)

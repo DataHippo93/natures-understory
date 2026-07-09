@@ -1,3 +1,6 @@
+// v7.7.8 (2026-07-09): produce ordering surface locked to `admin` role.
+// Daniel (wholesale_manager) is scoped to /lopro/wholesale-pricing only.
+
 // POST /api/produce-orders/[id]/rematch
 //
 // Re-runs the deterministic matcher (lib/produce/matcher.ts) over each
