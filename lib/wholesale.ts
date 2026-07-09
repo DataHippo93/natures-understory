@@ -14,6 +14,13 @@
 //     percentage adjustment instead of per-variant overrides).
 //   - Recipients auto-derived from Company Location catalog assignments +
 //     Company Contact customer records. Read-only; managed in Shopify Admin.
+//
+// v7.7.1 (2026-07-08):
+//   - Products page size 250 → 50. Adding `inventoryItem { unitCost { amount } }`
+//     in v7.7 pushed the products query cost to 1038, over Shopify's 1000-point
+//     single-query cap, and the endpoint was throwing on every load. Dropping
+//     the outer `first:` scales the cost down ~5× (est. ~208), well under the
+//     limit. Same total throughput — just more pages.
 
 import { shopifyGraphQL, assertNoUserErrors } from './shopify-lopro';
 
@@ -118,7 +125,7 @@ export async function loadGrid(): Promise<GridRow[]> {
   do {
     const data: ProductsPage = await shopifyGraphQL<ProductsPage>(
       `query($cursor: String) {
-        products(first: 250, after: $cursor, sortKey: TITLE) {
+        products(first: 50, after: $cursor, sortKey: TITLE) {
           pageInfo { hasNextPage endCursor }
           nodes {
             id title
@@ -388,7 +395,7 @@ export async function loadRecipients(): Promise<RecipientList> {
         c.email ||
         '(unnamed)',
       companyName,
-      t1,
+      t1: boolean,
       t2,
       optedOut,
     });
@@ -407,3 +414,4 @@ export async function loadRecipients(): Promise<RecipientList> {
 export function invalidateRecipientCache(): void {
   _recipientCache = null;
 }
+
