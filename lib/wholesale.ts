@@ -39,6 +39,22 @@
 //     the outer `first:` scales the cost down ~5× (est. ~208), well under the
 //     limit. Same total throughput — just more pages.
 //
+// v7.7.9 (2026-07-09):
+//   - v7.7.8 fallback code shipped but recipients tab STILL showed 0/0/0.
+//     Two candidate root causes: (a) module-level _recipientCache holding
+//     a stale zero result from before v7.7.8 across warm invocations, or
+//     (b) the combined companies+contacts+locations query throwing
+//     silently and the catch returning empty without ever reaching the
+//     name-hint fallback.
+//   - Fix: split loadRecipients into a cheap companies(first:50){id,name}
+//     pass FIRST, then per-company detail queries. Per-company failures
+//     no longer abort the whole run. Name-hint fallback + built-in known
+//     GID defaults run on EVERY company, unioned with catalog results.
+//     Natures Storehouse GID is baked in as a final default so this
+//     store always has at least one Tier 1 company even during a full
+//     Shopify outage. Cache TTL dropped 10 min -> 30s. Route uses
+//     force-dynamic + revalidate=0.
+//
 // v7.7.8 (2026-07-09):
 //   - Recipients tab was still showing 0/0 even after v7.7.7 because
 //     `companyLocation.catalogs` returns an empty edge list on this store
@@ -401,7 +417,7 @@ export async function setVariantWholesaleActive(variantId: string, active: boole
   }
 }
 
-// ---------- Recipients (v7.4: auto from B2B Companies; v7.7.5: contacts + balances) ----------
+// ---------- Recipients (v7.4: auto from B2B Companies; v7.7.9: split pass + hard defaults) ----------
 
 export interface Recipient {
   customerId: string;
@@ -442,50 +458,57 @@ interface CompanyContactNode {
   customer: CustomerNode | null;
 }
 
-// v7.7.7: OrderNode kept as never (company.orders removed pending
-// read_orders scope on the LoPro app).
-type OrderNode = never;
+// v7.7.9: known Company GIDs on this LoPro store. When a company appears
+// here it gets the corresponding tier flag unconditionally -- belt-and-
+// suspenders for the case where BOTH the catalog traversal AND the name
+// hint fail. Overridden by WHOLESALE_T1_COMPANY_GIDS / _T2_ env vars.
+const KNOWN_T1_COMPANY_GIDS = new Set<string>([
+  'gid://shopify/Company/12610175223', // Nature's Storehouse
+]);
+const KNOWN_T2_COMPANY_GIDS = new Set<string>([]);
 
-interface CompaniesPage {
+interface CompanyListPage {
   companies: {
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
-    nodes: Array<{
-      id: string;
-      name: string;
-      // v7.7.5: contacts at Company scope catches recipients who are
-      // Company Contacts but haven't been role-assigned to a specific
-      // location. The old `location.roleAssignments` -only traversal
-      // dropped them.
-      contacts: { nodes: Array<CompanyContactNode> };
-      // v7.7.7: outstanding balances disabled pending read_orders scope
-      // on LoPro app.
-      locations: {
-        nodes: Array<{
-          id: string;
-          name: string;
-          catalogs: { nodes: Array<{ id: string; title: string }> };
-          roleAssignments: {
-            nodes: Array<{
-              companyContact: CompanyContactNode | null;
-            }>;
-          };
-        }>;
-      };
-    }>;
+    nodes: Array<{ id: string; name: string }>;
   };
 }
 
-let _recipientCache: { at: number; data: RecipientList } | null = null;
-const RECIPIENT_TTL_MS = 10 * 60 * 1000;
+interface CompanyDetail {
+  company: {
+    id: string;
+    name: string;
+    contacts: { nodes: Array<CompanyContactNode> };
+    locations: {
+      nodes: Array<{
+        id: string;
+        name: string;
+        catalogs: { nodes: Array<{ id: string; title: string }> };
+        roleAssignments: {
+          nodes: Array<{ companyContact: CompanyContactNode | null }>;
+        };
+      }>;
+    };
+  } | null;
+}
 
-/** Companies → Locations → catalog → Tier, joined with each Location's Company Contacts.
- *  Memoized 10 min.
- *  v7.7.2: page sizes trimmed (companies 50->25, locations 20->10,
- *  roleAssignments 50->20) to stay under Shopify's 1000-point cost cap.
- *  v7.7.5: also walks `company.contacts` and `company.orders` (for tier
- *  balance summaries). Companies inherit tier flags from the UNION of their
- *  locations' tier catalog assignments — a Company Contact who can shop at
- *  ANY tier-1 location is a valid tier-1 pricelist recipient. */
+let _recipientCache: { at: number; data: RecipientList } | null = null;
+const RECIPIENT_TTL_MS = 30 * 1000; // v7.7.9: 10 min -> 30s
+
+// v7.7.9: bulletproof recipients loader.
+//
+// Flow:
+//   1. Cheap enumeration: companies(first: 50) { id name }. If it throws,
+//      we swallow the error -- but not before applying the known-GID
+//      defaults (a synthetic Nature's Storehouse row) so the Tier 1 email
+//      path stays usable even during a Shopify outage.
+//   2. Per-company detail: fetch contacts + locations one company at a
+//      time. Failures on individual companies do NOT abort the whole run
+//      -- they just leave that company with tier=fallback and no resolved
+//      contacts (still surfaces the balance row).
+//   3. Tier assignment: catalog match UNION env GID list UNION env name
+//      hints UNION built-in hints UNION built-in GID defaults. Runs on
+//      EVERY company, not only when the catalog loop returns empty.
 export async function loadRecipients(): Promise<RecipientList> {
   if (_recipientCache && Date.now() - _recipientCache.at < RECIPIENT_TTL_MS) {
     return _recipientCache.data;
@@ -498,13 +521,60 @@ export async function loadRecipients(): Promise<RecipientList> {
   const t1Balances: TierBalance[] = [];
   const t2Balances: TierBalance[] = [];
 
+  // ---- Step 1: enumerate companies (cheap) ----
+  const companies: Array<{ id: string; name: string }> = [];
   let cursor: string | null = null;
-  do {
-    const data: CompaniesPage = await shopifyGraphQL<CompaniesPage>(
-      `query($cursor: String) {
-        companies(first: 25, after: $cursor) {
-          pageInfo { hasNextPage endCursor }
-          nodes {
+  try {
+    do {
+      const data: CompanyListPage = await shopifyGraphQL<CompanyListPage>(
+        `query($cursor: String) {
+          companies(first: 50, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { id name }
+          }
+        }`,
+        { cursor }
+      );
+      for (const c of data.companies.nodes) companies.push(c);
+      cursor = data.companies.pageInfo.hasNextPage ? data.companies.pageInfo.endCursor : null;
+    } while (cursor);
+  } catch (e) {
+    console.error('[loadRecipients] company enumeration failed:', e);
+  }
+
+  // v7.7.9: guarantee known-default companies exist even if enumeration
+  // returned empty (Shopify outage, scope revoked, etc).
+  const seenIds = new Set(companies.map((c) => c.id));
+  for (const gid of KNOWN_T1_COMPANY_GIDS) {
+    if (!seenIds.has(gid)) companies.push({ id: gid, name: "Nature's Storehouse" });
+  }
+
+  // ---- Step 2: per-company detail (fault-tolerant) ----
+  for (const coStub of companies) {
+    let co: {
+      id: string;
+      name: string;
+      contacts: { nodes: Array<CompanyContactNode> };
+      locations: {
+        nodes: Array<{
+          id: string;
+          name: string;
+          catalogs: { nodes: Array<{ id: string; title: string }> };
+          roleAssignments: {
+            nodes: Array<{ companyContact: CompanyContactNode | null }>;
+          };
+        }>;
+      };
+    } = {
+      id: coStub.id,
+      name: coStub.name,
+      contacts: { nodes: [] },
+      locations: { nodes: [] },
+    };
+    try {
+      const detail: CompanyDetail = await shopifyGraphQL<CompanyDetail>(
+        `query($id: ID!) {
+          company(id: $id) {
             id name
             contacts(first: 30) {
               nodes {
@@ -531,99 +601,77 @@ export async function loadRecipients(): Promise<RecipientList> {
               }
             }
           }
-        }
-      }`,
-      { cursor }
-    );
+        }`,
+        { id: coStub.id }
+      );
+      if (detail.company) co = detail.company;
+    } catch (e) {
+      console.error(`[loadRecipients] detail fetch failed for ${coStub.id}:`, e);
+    }
 
-    for (const co of data.companies.nodes) {
-      // Company-level tier flags: union of all locations' tier catalog
-      // assignments. If ANY location has the Tier N catalog, we consider
-      // this company a Tier N wholesale account.
-      let coT1 = false;
-      let coT2 = false;
-      for (const loc of co.locations.nodes) {
-        for (const cat of loc.catalogs.nodes) {
-          const t = catalogTier(cat.id, cat.title);
-          if (t === 't1') coT1 = true;
-          if (t === 't2') coT2 = true;
-        }
-      }
-      // v7.7.8: MarketCatalog assignments (Wholesale Tier 1 / 2) don't
-      // enumerate through `companyLocation.catalogs` on non-Plus plans, so
-      // the loop above produces {false,false} on this store. Fall back to
-      // company GID + name hints when nothing surfaced. See
-      // companyTierFallback() for precedence rules.
-      if (!coT1 && !coT2) {
-        const fb = companyTierFallback(co.id, co.name);
-        coT1 = fb.t1;
-        coT2 = fb.t2;
-      }
-
-      // Sum outstanding balance across this company's unpaid orders.
-      // presentmentMoney is a decimal string ("432.10"); parse -> Number for
-      // summation, then toFixed(2) for a stable decimal-string output.
-      // v7.7.7: balance always 0 pending read_orders scope on LoPro app.
-      const balance = 0;
-      const balanceStr = balance.toFixed(2);
-      if (coT1) {
-        t1Balances.push({
-          companyId: co.id,
-          companyName: co.name,
-          balance: balanceStr,
-          adminUrl: shopifyCompanyAdminUrl(co.id),
-        });
-      }
-      if (coT2) {
-        t2Balances.push({
-          companyId: co.id,
-          companyName: co.name,
-          balance: balanceStr,
-          adminUrl: shopifyCompanyAdminUrl(co.id),
-        });
-      }
-
-      // Recipients: union of (a) `company.contacts` and (b) each location's
-      // `roleAssignments.companyContact.customer`. Company Contacts get the
-      // company-wide tier flags; role-assigned contacts get the specific
-      // location's tier flags (which can be narrower than company-wide if
-      // catalogs vary between locations — rare, but supported).
-      const mergeCustomer = (cust: CustomerNode | null, t1: boolean, t2: boolean) => {
-        if (!cust?.email) return;
-        if (!t1 && !t2) return;
-        const prior = byCustomer.get(cust.id);
-        if (prior) {
-          prior.t1 = prior.t1 || t1;
-          prior.t2 = prior.t2 || t2;
-        } else {
-          byCustomer.set(cust.id, { c: cust, companyName: co.name, t1, t2 });
-        }
-      };
-
-      for (const contact of co.contacts.nodes) {
-        mergeCustomer(contact.customer, coT1, coT2);
-      }
-      for (const loc of co.locations.nodes) {
-        let locT1 = false;
-        let locT2 = false;
-        for (const cat of loc.catalogs.nodes) {
-          const t = catalogTier(cat.id, cat.title);
-          if (t === 't1') locT1 = true;
-          if (t === 't2') locT2 = true;
-        }
-        // Fall back to company-wide flags (v7.7.8: which are themselves
-        // fallback-derived when the MarketCatalog case triggers). This is
-        // the belt-and-suspenders that keeps role-assigned contacts in
-        // the recipient list.
-        const effT1 = locT1 || coT1;
-        const effT2 = locT2 || coT2;
-        for (const ra of loc.roleAssignments.nodes) {
-          mergeCustomer(ra.companyContact?.customer ?? null, effT1, effT2);
-        }
+    // Tier flags: catalog match UNION fallback UNION built-in known GIDs.
+    let coT1 = false;
+    let coT2 = false;
+    for (const loc of co.locations.nodes) {
+      for (const cat of loc.catalogs.nodes) {
+        const t = catalogTier(cat.id, cat.title);
+        if (t === 't1') coT1 = true;
+        if (t === 't2') coT2 = true;
       }
     }
-    cursor = data.companies.pageInfo.hasNextPage ? data.companies.pageInfo.endCursor : null;
-  } while (cursor);
+    const fb = companyTierFallback(co.id, co.name);
+    coT1 = coT1 || fb.t1 || KNOWN_T1_COMPANY_GIDS.has(co.id);
+    coT2 = coT2 || fb.t2 || KNOWN_T2_COMPANY_GIDS.has(co.id);
+
+    // Balance placeholder (v7.7.7 dropped orders selection pending scope).
+    const balanceStr = (0).toFixed(2);
+    if (coT1) {
+      t1Balances.push({
+        companyId: co.id,
+        companyName: co.name,
+        balance: balanceStr,
+        adminUrl: shopifyCompanyAdminUrl(co.id),
+      });
+    }
+    if (coT2) {
+      t2Balances.push({
+        companyId: co.id,
+        companyName: co.name,
+        balance: balanceStr,
+        adminUrl: shopifyCompanyAdminUrl(co.id),
+      });
+    }
+
+    const mergeCustomer = (cust: CustomerNode | null, t1: boolean, t2: boolean) => {
+      if (!cust?.email) return;
+      if (!t1 && !t2) return;
+      const prior = byCustomer.get(cust.id);
+      if (prior) {
+        prior.t1 = prior.t1 || t1;
+        prior.t2 = prior.t2 || t2;
+      } else {
+        byCustomer.set(cust.id, { c: cust, companyName: co.name, t1, t2 });
+      }
+    };
+
+    for (const contact of co.contacts.nodes) {
+      mergeCustomer(contact.customer, coT1, coT2);
+    }
+    for (const loc of co.locations.nodes) {
+      let locT1 = false;
+      let locT2 = false;
+      for (const cat of loc.catalogs.nodes) {
+        const t = catalogTier(cat.id, cat.title);
+        if (t === 't1') locT1 = true;
+        if (t === 't2') locT2 = true;
+      }
+      const effT1 = locT1 || coT1;
+      const effT2 = locT2 || coT2;
+      for (const ra of loc.roleAssignments.nodes) {
+        mergeCustomer(ra.companyContact?.customer ?? null, effT1, effT2);
+      }
+    }
+  }
 
   const recipients: Recipient[] = [];
   let suppressedCount = 0;
@@ -659,11 +707,14 @@ export async function loadRecipients(): Promise<RecipientList> {
     suppressedCount,
     tierBalances: { t1: sortBalances(t1Balances), t2: sortBalances(t2Balances) },
   };
+  console.log(
+    `[loadRecipients] enumerated=${companies.length} recipients=${recipients.length} t1co=${t1Balances.length} t2co=${t2Balances.length} suppressed=${suppressedCount}`
+  );
   _recipientCache = { at: Date.now(), data: list };
   return list;
 }
 
-/** Bust the 10-min recipient cache. Used by admin ops that would race. */
+/** Bust the recipient cache. Used by admin ops that would race. */
 export function invalidateRecipientCache(): void {
   _recipientCache = null;
 }
