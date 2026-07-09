@@ -37,11 +37,11 @@ const fmtDate = (iso: string | null) => {
 
 const statusChip = (status: string): { bg: string; label: string } => {
   switch (status) {
-    case 'draft':    return { bg: 'var(--sand)',        label: 'Draft' };
-    case 'ready':    return { bg: 'var(--maple)',       label: 'Ready' };
+    case 'draft':    return { bg: 'var(--text-muted)',        label: 'Draft' };
+    case 'ready':    return { bg: 'var(--gold)',       label: 'Ready' };
     case 'sent':     return { bg: 'var(--forest-mid)',  label: 'Sent' };
-    case 'received': return { bg: 'var(--moss-dark)',   label: 'Received' };
-    default:         return { bg: 'var(--slate)',       label: status };
+    case 'received': return { bg: 'var(--sage)',   label: 'Received' };
+    default:         return { bg: 'var(--text-muted)',       label: status };
   }
 };
 
@@ -90,14 +90,14 @@ export default function ProduceOrdersClient() {
       <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-josefin)', fontSize: 28, margin: 0, color: 'var(--cream)' }}>Produce Orders</h1>
-          <p style={{ margin: '4px 0 0', color: 'var(--sand)', fontSize: 13 }}>
+          <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
             Assemble Albert&apos;s / Kent&apos;s / Birdsfoot / RVFM orders. Draft → review → send.
           </p>
         </div>
         <button
           onClick={() => router.push('/lopro/produce-orders/new')}
           style={{
-            background: 'var(--maple)',
+            background: 'var(--gold)',
             color: 'var(--forest-dark)',
             border: 'none',
             borderRadius: 8,
@@ -150,18 +150,18 @@ export default function ProduceOrdersClient() {
       )}
 
       {orders === null && !error && (
-        <div style={{ color: 'var(--sand)' }}>Loading orders…</div>
+        <div style={{ color: 'var(--text-muted)' }}>Loading orders…</div>
       )}
 
       {orders !== null && grouped.length === 0 && (
-        <div style={{ background: 'var(--forest-mid)', color: 'var(--sand)', padding: 24, borderRadius: 8, textAlign: 'center' }}>
+        <div style={{ background: 'var(--forest-mid)', color: 'var(--text-muted)', padding: 24, borderRadius: 8, textAlign: 'center' }}>
           No orders yet. Tap <strong>+ New Order</strong> to draft one.
         </div>
       )}
 
       {grouped.map(([vendor, list]) => (
         <section key={vendor} style={{ marginBottom: 24 }}>
-          <h2 style={{ fontFamily: 'var(--font-josefin)', fontSize: 18, color: 'var(--maple)', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          <h2 style={{ fontFamily: 'var(--font-josefin)', fontSize: 18, color: 'var(--gold)', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: 0.5 }}>
             {vendor}
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
@@ -185,19 +185,19 @@ export default function ProduceOrdersClient() {
                     <span style={{ background: chip.bg, color: 'var(--forest-dark)', fontSize: 11, padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
                       {chip.label}
                     </span>
-                    <span style={{ fontSize: 11, color: 'var(--sand)' }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                       For {fmtDate(o.target_delivery_date)}
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
                     <span style={{ fontSize: 20, fontWeight: 600 }}>{money(o.subtotal_cents)}</span>
                     {o.min_cents != null && (
-                      <span style={{ fontSize: 11, color: o.min_hit ? 'var(--moss)' : 'var(--sand)' }}>
+                      <span style={{ fontSize: 11, color: o.min_hit ? 'var(--good)' : 'var(--text-muted)' }}>
                         min {money(o.min_cents)} {o.min_hit ? '✓' : ''}
                       </span>
                     )}
                   </div>
-                  <div style={{ display: 'flex', gap: 8, fontSize: 11, color: 'var(--sand)' }}>
+                  <div style={{ display: 'flex', gap: 8, fontSize: 11, color: 'var(--text-muted)' }}>
                     {o.supplier_email_sent && <span>📧 sent</span>}
                     {o.thrive_po_id && <span>PO ✓</span>}
                     {o.rvfm_piggyback && <span>RVFM piggyback</span>}

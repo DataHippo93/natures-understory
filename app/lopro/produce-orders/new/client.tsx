@@ -145,7 +145,7 @@ export default function NewOrderClient() {
   return (
     <div style={{ padding: 16, maxWidth: 720, margin: '0 auto' }}>
       <header style={{ marginBottom: 20 }}>
-        <a href="/lopro/produce-orders" style={{ color: 'var(--sand)', textDecoration: 'none', fontSize: 13 }}>← All orders</a>
+        <a href="/lopro/produce-orders" style={{ color: 'var(--text-muted)', textDecoration: 'none', fontSize: 13 }}>← All orders</a>
         <h1 style={{ fontFamily: 'var(--font-josefin)', fontSize: 26, margin: '6px 0 0', color: 'var(--cream)' }}>New produce order</h1>
       </header>
 
@@ -157,7 +157,7 @@ export default function NewOrderClient() {
 
       <div style={{ display: 'grid', gap: 14 }}>
         <label>
-          <div style={{ fontSize: 12, color: 'var(--sand)', marginBottom: 4 }}>Vendor</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Vendor</div>
           <select
             value={vendorId}
             onChange={(e) => setVendorId(e.target.value)}
@@ -172,7 +172,7 @@ export default function NewOrderClient() {
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <label>
-            <div style={{ fontSize: 12, color: 'var(--sand)', marginBottom: 4 }}>Target delivery</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Target delivery</div>
             <input
               type="date"
               value={deliveryDate}
@@ -181,7 +181,7 @@ export default function NewOrderClient() {
             />
           </label>
           <label>
-            <div style={{ fontSize: 12, color: 'var(--sand)', marginBottom: 4 }}>Target DoS (days)</div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Target DoS (days)</div>
             <input
               type="number"
               step="0.1"
@@ -193,14 +193,14 @@ export default function NewOrderClient() {
         </div>
 
         {isAlberts && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--sand)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-muted)' }}>
             <input type="checkbox" checked={rvfmPiggyback} onChange={(e) => setRvfmPiggyback(e.target.checked)} />
             RVFM piggyback (separate invoice, same truck)
           </label>
         )}
 
         <label>
-          <div style={{ fontSize: 12, color: 'var(--sand)', marginBottom: 4 }}>Items (one per line)</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Items (one per line)</div>
           <textarea
             value={rawText}
             onChange={(e) => setRawText(e.target.value)}
@@ -212,10 +212,10 @@ export default function NewOrderClient() {
 
         {parsedPreview.length > 0 && (
           <div style={{ background: 'var(--forest-mid)', border: '1px solid var(--forest-light)', borderRadius: 6, padding: 10 }}>
-            <div style={{ fontSize: 11, color: 'var(--sand)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Preview parse</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Preview parse</div>
             <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
               <thead>
-                <tr style={{ color: 'var(--sand)' }}>
+                <tr style={{ color: 'var(--text-muted)' }}>
                   <th style={{ textAlign: 'left', padding: '4px 6px' }}>Qty</th>
                   <th style={{ textAlign: 'left', padding: '4px 6px' }}>Item</th>
                   <th style={{ textAlign: 'left', padding: '4px 6px' }}>Pack</th>
@@ -226,8 +226,8 @@ export default function NewOrderClient() {
                 {parsedPreview.map((p, i) => (
                   <tr key={i} style={{ borderTop: '1px solid var(--forest-light)' }}>
                     <td style={{ padding: '4px 6px' }}>{p.qty}</td>
-                    <td style={{ padding: '4px 6px' }}>{p.name || <em style={{ color: 'var(--sand)' }}>(empty)</em>}</td>
-                    <td style={{ padding: '4px 6px', color: 'var(--sand)' }}>{p.pack ?? ''}</td>
+                    <td style={{ padding: '4px 6px' }}>{p.name || <em style={{ color: 'var(--text-muted)' }}>(empty)</em>}</td>
+                    <td style={{ padding: '4px 6px', color: 'var(--text-muted)' }}>{p.pack ?? ''}</td>
                     <td style={{ padding: '4px 6px', textAlign: 'right' }}>{p.unit_cost_cents == null ? '' : `$${(p.unit_cost_cents / 100).toFixed(2)}`}</td>
                   </tr>
                 ))}
@@ -240,7 +240,7 @@ export default function NewOrderClient() {
           onClick={submit}
           disabled={submitting || !vendorId}
           style={{
-            background: submitting || !vendorId ? 'var(--slate)' : 'var(--maple)',
+            background: submitting || !vendorId ? 'var(--text-muted)' : 'var(--gold)',
             color: 'var(--forest-dark)',
             border: 'none',
             borderRadius: 8,

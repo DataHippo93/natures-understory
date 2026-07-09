@@ -265,19 +265,19 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
       <div style={{ background: '#4a1010', color: '#ffb0b0', padding: 12, borderRadius: 8 }}>{error}</div>
     </div>
   );
-  if (!order) return <div style={{ padding: 16, color: 'var(--sand)' }}>Loading…</div>;
+  if (!order) return <div style={{ padding: 16, color: 'var(--text-muted)' }}>Loading…</div>;
 
   return (
     <div style={{ padding: 16, maxWidth: 1100, margin: '0 auto', paddingBottom: 120 }}>
       <header style={{ marginBottom: 16 }}>
-        <a href="/lopro/produce-orders" style={{ color: 'var(--sand)', textDecoration: 'none', fontSize: 13 }}>← All orders</a>
+        <a href="/lopro/produce-orders" style={{ color: 'var(--text-muted)', textDecoration: 'none', fontSize: 13 }}>← All orders</a>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginTop: 6 }}>
           <div>
             <h1 style={{ fontFamily: 'var(--font-josefin)', fontSize: 24, margin: 0, color: 'var(--cream)' }}>
               {order.produce_vendors.display_name} — {order.target_delivery_date ?? 'no date'}
             </h1>
-            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--sand)' }}>
-              Status: <strong style={{ color: 'var(--maple)' }}>{order.status}</strong>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-muted)' }}>
+              Status: <strong style={{ color: 'var(--gold)' }}>{order.status}</strong>
               {order.target_dos != null && <> · Target DoS <strong>{Number(order.target_dos).toFixed(1)}d</strong></>}
               {order.rvfm_piggyback && <> · RVFM piggyback</>}
             </div>
@@ -289,12 +289,12 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
       <div style={{ background: 'var(--forest-mid)', border: '1px solid var(--forest-light)', borderRadius: 10, padding: 12, marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
           <span style={{ fontSize: 24, fontWeight: 700, color: 'var(--cream)' }}>{money(subtotal)}</span>
-          <span style={{ fontSize: 12, color: gap === 0 ? 'var(--moss)' : 'var(--sand)' }}>
+          <span style={{ fontSize: 12, color: gap === 0 ? 'var(--good)' : 'var(--text-muted)' }}>
             {gap === 0 ? `✓ over ${money(minCents)} min` : `${money(gap)} to ${money(minCents)} min`}
           </span>
         </div>
         <div style={{ background: 'var(--forest-dark)', height: 6, borderRadius: 3, overflow: 'hidden' }}>
-          <div style={{ background: gap === 0 ? 'var(--moss)' : 'var(--maple)', height: '100%', width: `${pct}%`, transition: 'width 200ms' }} />
+          <div style={{ background: gap === 0 ? 'var(--good)' : 'var(--gold)', height: '100%', width: `${pct}%`, transition: 'width 200ms' }} />
         </div>
       </div>
 
@@ -302,7 +302,7 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
       <div style={{ overflowX: 'auto', background: 'var(--forest-mid)', border: '1px solid var(--forest-light)', borderRadius: 10, padding: 10 }}>
         <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ color: 'var(--sand)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <tr style={{ color: 'var(--text-muted)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
               <th style={{ textAlign: 'left', padding: '6px 8px', minWidth: 200 }}>Item</th>
               <th style={{ textAlign: 'right', padding: '6px 6px', width: 60 }}>Qty</th>
               <th style={{ textAlign: 'left', padding: '6px 6px', width: 80 }}>Pack</th>
@@ -326,8 +326,8 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
                       onBlur={(e) => patchLine(l.id, { product_name: e.target.value })}
                       style={{ width: '100%', background: 'transparent', border: 'none', color: 'var(--cream)', padding: '4px 2px', fontSize: 13 }}
                     />
-                    {l.reason && <div style={{ fontSize: 11, color: 'var(--sand)', marginTop: 2 }}>{l.reason}</div>}
-                    {l.rule_deviation && <div style={{ fontSize: 11, color: 'var(--maple)', marginTop: 2 }}>⚠ {l.rule_deviation}</div>}
+                    {l.reason && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{l.reason}</div>}
+                    {l.rule_deviation && <div style={{ fontSize: 11, color: 'var(--gold)', marginTop: 2 }}>⚠ {l.rule_deviation}</div>}
                     {l.recent_burn && <div style={{ fontSize: 11, color: '#ff8080', marginTop: 2 }}>🔥 recent burn</div>}
                   </td>
                   <td style={{ padding: '6px 6px' }}>
@@ -387,7 +387,7 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
                     <button
                       onClick={() => deleteLine(l.id)}
                       title="Delete line"
-                      style={{ background: 'transparent', border: 'none', color: 'var(--sand)', cursor: 'pointer', fontSize: 16 }}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 16 }}
                     >×</button>
                   </td>
                 </tr>
@@ -396,7 +396,7 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
           </tbody>
         </table>
         {lines.length === 0 && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--sand)' }}>No lines yet.</div>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)' }}>No lines yet.</div>
         )}
         <div style={{ marginTop: 10 }}>
           <button
@@ -419,14 +419,14 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
         <button
           onClick={sendDraft}
           disabled={sending}
-          style={{ background: 'var(--maple)', color: 'var(--forest-dark)', border: 'none', borderRadius: 8, padding: '10px 16px', fontSize: 13, fontWeight: 600, cursor: sending ? 'not-allowed' : 'pointer' }}
+          style={{ background: 'var(--gold)', color: 'var(--forest-dark)', border: 'none', borderRadius: 8, padding: '10px 16px', fontSize: 13, fontWeight: 600, cursor: sending ? 'not-allowed' : 'pointer' }}
         >
           {sending ? 'Sending…' : 'Send draft to my inbox'}
         </button>
         <button
           onClick={createThrivePo}
           disabled={creatingPo}
-          style={{ background: 'var(--moss-dark)', color: 'var(--cream)', border: '1px solid var(--forest-light)', borderRadius: 8, padding: '10px 16px', fontSize: 13, cursor: creatingPo ? 'not-allowed' : 'pointer' }}
+          style={{ background: 'var(--sage)', color: 'var(--cream)', border: '1px solid var(--forest-light)', borderRadius: 8, padding: '10px 16px', fontSize: 13, cursor: creatingPo ? 'not-allowed' : 'pointer' }}
         >
           {creatingPo ? 'Creating…' : 'Create Thrive PO'}
         </button>
@@ -443,12 +443,12 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
             style={{ background: 'var(--forest-dark)', border: '1px solid var(--forest-light)', borderRadius: 10, maxWidth: 900, width: '100%', maxHeight: '85vh', overflow: 'auto', padding: 16 }}
           >
             {previewLoading || !preview ? (
-              <div style={{ color: 'var(--sand)' }}>Composing…</div>
+              <div style={{ color: 'var(--text-muted)' }}>Composing…</div>
             ) : (
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
                   <div>
-                    <div style={{ fontSize: 11, color: 'var(--sand)' }}>Subject</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Subject</div>
                     <div style={{ fontSize: 16, color: 'var(--cream)' }}>{preview.subject}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
@@ -464,14 +464,14 @@ export default function ReviewClient({ orderId }: { orderId: string }) {
               </>
             )}
             <div style={{ marginTop: 12, textAlign: 'right' }}>
-              <button onClick={() => setPreviewOpen(false)} style={{ background: 'transparent', color: 'var(--sand)', border: '1px solid var(--forest-light)', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }}>Close</button>
+              <button onClick={() => setPreviewOpen(false)} style={{ background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--forest-light)', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }}>Close</button>
             </div>
           </div>
         </div>
       )}
 
       {toast && (
-        <div style={{ position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)', background: toast.kind === 'success' ? 'var(--moss-dark)' : '#5a1a1a', color: 'var(--cream)', padding: '10px 16px', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)', zIndex: 200, fontSize: 13 }}>
+        <div style={{ position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)', background: toast.kind === 'success' ? 'var(--sage)' : '#5a1a1a', color: 'var(--cream)', padding: '10px 16px', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.3)', zIndex: 200, fontSize: 13 }}>
           {toast.msg}
         </div>
       )}
