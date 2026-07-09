@@ -6,7 +6,11 @@ import { composeSupplierEmail } from '@/lib/produce/compose-email';
 export const dynamic = 'force-dynamic';
 
 const CLARK_INBOX = 'cmaine@ycconsulting.biz';
-const FROM_ADDR = 'no-reply@natures-storehouse.com';
+// Resend default sender — works for any Resend account without
+// domain verification. Custom domain (no-reply@natures-storehouse.com)
+// still fails DKIM check on this project's Resend workspace. Swap back
+// once natures-storehouse.com is added + verified in Resend.
+const FROM_ADDR = 'Nature\'s Understory <onboarding@resend.dev>';
 
 export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await hasRole(['wholesale_manager', 'admin']);
@@ -51,6 +55,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     body: JSON.stringify({
       from: FROM_ADDR,
       to: [CLARK_INBOX],
+      reply_to: [CLARK_INBOX],
       subject: `[DRAFT] ${composed.subject}`,
       text: composed.textBody,
       html: composed.htmlBody,
