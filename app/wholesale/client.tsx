@@ -8,6 +8,14 @@
 // v7.5 (2026-07-07): pricelist modal shows Copy plain text button; draft
 //   includes both htmlBody and textBody (backend renders symmetric Retail /
 //   Your price / Save% columns in both formats).
+// v7.7.4 (2026-07-08):
+//   - Desktop grid gets explicit <colgroup> column widths + table-layout:
+//     fixed so wider headers (Retail, Lot Cost) no longer push Tier 2 off
+//     the visible area. Item column flexes to fill remaining width.
+//   - Pricelist Copy buttons now (1) fall back to document.execCommand('copy')
+//     when navigator.clipboard is unavailable, and (2) show a success/error
+//     toast so a click always produces visible feedback (previously silent).
+//
 // v7.7.3 (2026-07-08):
 //   - Each row shows a small ↗ icon-link next to the Wholesale? checkbox that
 //     opens the Shopify Admin variant edit page in a new tab (Daniel's shortcut
@@ -84,6 +92,46 @@ export default function WholesaleClient() {
   const [draft, setDraft] = useState<(PricelistDraft & { tier: Tier }) | null>(null);
   const [generating, setGenerating] = useState<Tier | null>(null);
   const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  // v7.7.4: toast + robust clipboard helper. Both live at component scope
+  // because the pricelist modal is rendered from the same component tree.
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'error' = 'success') => {
+      setToast({ message, type });
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2000);
+    },
+    [],
+  );
+
+  // Async clipboard API with execCommand fallback for browsers/modal focus
+  // contexts where navigator.clipboard.writeText silently rejects.
+  const copyToClipboard = useCallback(
+    async (text: string, label: string) => {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        showToast(`✓ Copied ${label}`, 'success');
+      } catch (err) {
+        console.error('Copy failed:', err);
+        showToast(`Failed to copy ${label} — try selecting the text manually`, 'error');
+      }
+    },
+    [showToast],
+  );
+
 
   const loadGrid = useCallback(async () => {
     setLoadError(null);
@@ -421,7 +469,21 @@ export default function WholesaleClient() {
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading grid…</p>
           ) : (
             <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid var(--forest-mid)' }}>
-              <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+              <table
+                className="w-full text-sm"
+                style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}
+              >
+                {/* v7.7.4: fixed column widths so wider headers can't
+                    stretch the grid. Item is the only flex column. */}
+                <colgroup>
+                  <col style={{ width: '96px' }} />{/* Wholesale? */}
+                  <col />{/* Item — flexes */}
+                  <col style={{ width: '100px' }} />{/* Variant */}
+                  <col style={{ width: '96px' }} />{/* Retail */}
+                  <col style={{ width: '96px' }} />{/* Lot Cost */}
+                  <col style={{ width: '96px' }} />{/* Tier 1 */}
+                  <col style={{ width: '96px' }} />{/* Tier 2 */}
+                </colgroup>
                 <thead>
                   <tr style={{ background: 'var(--forest-darkest)', color: 'var(--sage)' }}>
                     <th className="px-3 py-2 text-center font-medium">Wholesale?</th>
@@ -572,7 +634,7 @@ export default function WholesaleClient() {
                 type="button"
                 className="rounded-md px-3 py-1.5 text-sm font-medium"
                 style={{ background: 'var(--gold)', color: '#082a1b' }}
-                onClick={() => navigator.clipboard.writeText(draft.bcc.join(', '))}
+                onClick={() => copyToClipboard(draft.bcc.join(', '), 'BCC list')}
               >
                 Copy BCC list
               </button>
@@ -580,7 +642,7 @@ export default function WholesaleClient() {
                 type="button"
                 className="rounded-md px-3 py-1.5 text-sm font-medium"
                 style={{ background: 'var(--gold)', color: '#082a1b' }}
-                onClick={() => navigator.clipboard.writeText(draft.subject)}
+                onClick={() => copyToClipboard(draft.subject, 'subject')}
               >
                 Copy subject
               </button>
@@ -588,11 +650,29 @@ export default function WholesaleClient() {
                 type="button"
                 className="rounded-md px-3 py-1.5 text-sm font-medium"
                 style={{ background: 'var(--gold)', color: '#082a1b' }}
-                onClick={() => {
-                  const blob = new Blob([draft.htmlBody], { type: 'text/html' });
-                  navigator.clipboard.write([
-                    new ClipboardItem({ 'text/html': blob, 'text/plain': new Blob([draft.textBody], { type: 'text/plain' }) }),
-                  ]);
+                onClick={async () => {
+                  // v7.7.4: rich HTML clipboard when the browser supports
+                  // ClipboardItem; falls back to plain-text write so the
+                  // button always produces a result + toast.
+                  try {
+                    if (
+                      navigator.clipboard &&
+                      typeof ClipboardItem !== 'undefined' &&
+                      window.isSecureContext
+                    ) {
+                      const item = new ClipboardItem({
+                        'text/html': new Blob([draft.htmlBody], { type: 'text/html' }),
+                        'text/plain': new Blob([draft.textBody], { type: 'text/plain' }),
+                      });
+                      await navigator.clipboard.write([item]);
+                      showToast('✓ Copied email body', 'success');
+                    } else {
+                      await copyToClipboard(draft.textBody, 'email body');
+                    }
+                  } catch (err) {
+                    console.error('Copy email body failed:', err);
+                    await copyToClipboard(draft.textBody, 'email body');
+                  }
                 }}
               >
                 Copy email body
@@ -601,7 +681,7 @@ export default function WholesaleClient() {
                 type="button"
                 className="rounded-md px-3 py-1.5 text-sm font-medium"
                 style={{ background: 'var(--sage)', color: '#082a1b' }}
-                onClick={() => navigator.clipboard.writeText(draft.textBody)}
+                onClick={() => copyToClipboard(draft.textBody, 'plain text')}
               >
                 Copy plain text
               </button>
@@ -615,6 +695,20 @@ export default function WholesaleClient() {
               dangerouslySetInnerHTML={{ __html: draft.htmlBody }}
             />
           </div>
+        </div>
+      )}
+      {/* v7.7.4: toast for clipboard feedback (2s auto-dismiss). */}
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed right-4 top-4 z-50 rounded-md px-4 py-2 text-sm font-medium shadow-lg"
+          style={{
+            background: toast.type === 'success' ? 'var(--sage)' : '#7f1d1d',
+            color: toast.type === 'success' ? '#082a1b' : '#fff',
+          }}
+        >
+          {toast.message}
         </div>
       )}
     </div>
