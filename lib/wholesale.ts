@@ -395,7 +395,7 @@ export async function loadRecipients(): Promise<RecipientList> {
         c.email ||
         '(unnamed)',
       companyName,
-      t1: boolean,
+      t1,
       t2,
       optedOut,
     });
