@@ -8,6 +8,17 @@
 // v7.5 (2026-07-07): pricelist modal shows Copy plain text button; draft
 //   includes both htmlBody and textBody (backend renders symmetric Retail /
 //   Your price / Save% columns in both formats).
+// v7.7.10 (2026-07-09):
+//   - Foolproof responsive grid across zoom + display scale. Desktop table
+//     is now wrapped in an overflow-x-auto container with an explicit
+//     minWidth so 96px column widths always render clean — users at high
+//     Windows display scale (125-150%) + browser zoom no longer see adjacent
+//     column values collide ("2.25.50" from Basil retail + lot cost). Below
+//     md breakpoint we render a stacked card list instead of the grid, so
+//     phone / narrow-viewport editing works without horizontal scrolling.
+//     Inputs inside cells got w-full min-w-0 so they can never overflow
+//     their cell (min-w-0 is the fix for table/flex intrinsic min-width).
+//     Same save handlers wire both views — no state-logic change.
 // v7.7.4 (2026-07-08):
 //   - Desktop grid gets explicit <colgroup> column widths + table-layout:
 //     fixed so wider headers (Retail, Lot Cost) no longer push Tier 2 off
@@ -384,10 +395,36 @@ export default function WholesaleClient() {
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
         }}
-        style={{ ...inputStyle, opacity: disabled ? 0.35 : 1 }}
+        // v7.7.10: w-full + min-w-0 so the input can’t overflow its cell
+        // when zoom + display-scale narrow the viewport. Width is set to
+        // 100% inline to override the 6rem baseline from inputStyle.
+        className="w-full min-w-0"
+        style={{ ...inputStyle, width: '100%', minWidth: 0, opacity: disabled ? 0.35 : 1 }}
       />
       {badge(`${row.variantId}:${field}`)}
     </td>
+  );
+
+  // v7.7.10: mobile stacked-card counterpart to `cell` — same commit/badge
+  // wiring, just renders label + input as a horizontal pair inside a <li>.
+  const mCell = (row: GridRow, field: CellField, value: string, disabled: boolean, label: string) => (
+    <label className="flex items-center gap-1">
+      <span className="min-w-16" style={{ color: 'var(--text-muted)' }}>{label}</span>
+      <input
+        key={`m:${row.variantId}:${field}:${value}`}
+        defaultValue={value}
+        inputMode="decimal"
+        disabled={disabled}
+        aria-label={`${row.productTitle} ${row.variantTitle} ${field}`}
+        onBlur={(e) => e.target.value !== value && commit(row, field, e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        }}
+        className="w-20 min-w-0"
+        style={{ ...inputStyle, width: '5rem', minWidth: 0, opacity: disabled ? 0.35 : 1 }}
+      />
+      {badge(`${row.variantId}:${field}`)}
+    </label>
   );
 
   const tabButton = (id: TabId, label: string) => (
@@ -598,10 +635,14 @@ export default function WholesaleClient() {
           {rows === null && !loadError ? (
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading grid…</p>
           ) : (
-            <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid var(--forest-mid)' }}>
+            <div className="rounded-lg" style={{ border: '1px solid var(--forest-mid)' }}>
+              {/* v7.7.10: desktop table lives in its own overflow-x-auto wrapper */}
+              {/* + minWidth: 900px so 96px cols always get their space. Table is */}
+              {/* hidden below md; a stacked <ul> below takes over on narrow viewports. */}
+              <div className="w-full overflow-x-auto">
               <table
-                className="w-full text-sm"
-                style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}
+                className="hidden md:table w-full text-sm"
+                style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: '900px' }}
               >
                 <colgroup>
                   <col style={{ width: '96px' }} />
@@ -671,6 +712,60 @@ export default function WholesaleClient() {
                   ))}
                 </tbody>
               </table>
+              </div>
+              {/* v7.7.10: mobile stacked view (< md). Shares commit/toggle handlers. */}
+              <ul className="md:hidden">
+                {visible.map((row) => (
+                  <li
+                    key={row.variantId}
+                    className="space-y-2"
+                    style={{
+                      borderTop: '1px solid var(--forest-mid)',
+                      opacity: row.wholesaleActive ? 1 : 0.5,
+                      padding: '12px',
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={row.wholesaleActive}
+                        onChange={() => toggle(row)}
+                        aria-label={`${row.productTitle} ${row.variantTitle} wholesale active`}
+                      />
+                      <a
+                        href={row.adminUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Open in Shopify Admin"
+                        aria-label={`Open ${row.productTitle} in Shopify Admin`}
+                        className="text-sm leading-none"
+                        style={{ color: 'var(--sage)', textDecoration: 'none', opacity: 0.7 }}
+                      >
+                        ↗
+                      </a>
+                      <span className="font-medium" style={{ color: 'var(--cream)' }}>
+                        {row.productTitle}
+                      </span>
+                      {row.variantTitle !== 'Default Title' && (
+                        <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                          · {row.variantTitle}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-2 pl-8 text-sm">
+                      {mCell(row, 'retail', fmt(row.retail), false, 'Retail')}
+                      <div className="flex items-center gap-1">
+                        <span className="min-w-16" style={{ color: 'var(--text-muted)' }}>Lot Cost</span>
+                        <span style={{ color: 'var(--cream)' }}>
+                          {row.lotCost !== null ? '$' + Number(row.lotCost).toFixed(2) : '—'}
+                        </span>
+                      </div>
+                      {mCell(row, 't1', fmt(row.tier1), !row.wholesaleActive, 'Tier 1')}
+                      {mCell(row, 't2', fmt(row.tier2), !row.wholesaleActive, 'Tier 2')}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           {rows !== null && (
