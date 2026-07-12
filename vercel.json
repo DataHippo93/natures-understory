@@ -39,6 +39,10 @@
     {
       "path": "/api/cron/ferris-ridge-daily-report",
       "schedule": "15 5 * * *"
+    },
+    {
+      "path": "/api/cron/wholesale-reconcile",
+      "schedule": "0 6 * * *"
     }
   ]
 }

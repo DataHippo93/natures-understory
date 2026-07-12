@@ -655,7 +655,12 @@ export default function WholesaleClient() {
                 </colgroup>
                 <thead>
                   <tr style={{ background: 'var(--forest-darkest)', color: 'var(--sage)' }}>
-                    <th className="px-3 py-2 text-center font-medium">Wholesale?</th>
+                    <th
+                      className="px-3 py-2 text-center font-medium"
+                      title="Enable this variant for wholesale — publishes the parent product to the tier catalogs and unlocks tier pricing. Disabling clears tier prices and unpublishes if no siblings remain priced. (v7.7.11)"
+                    >
+                      Enable pricing
+                    </th>
                     <th className="px-3 py-2 text-left font-medium">Item</th>
                     <th className="px-3 py-2 text-left font-medium">Variant</th>
                     <th className="px-3 py-2 text-right font-medium">Retail</th>

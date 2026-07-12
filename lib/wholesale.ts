@@ -3,8 +3,41 @@
 // Tier model (non-Plus plan — catalogs route through B2B markets):
 //   Company Location → B2B market → catalog → price list
 // Env: WHOLESALE_T1_PRICE_LIST_ID, WHOLESALE_T2_PRICE_LIST_ID
+//      WHOLESALE_T1_PUBLICATION_ID, WHOLESALE_T2_PUBLICATION_ID (v7.7.11)
 // Optional env: WHOLESALE_T1_CATALOG_ID, WHOLESALE_T2_CATALOG_ID
 //   (for recipient tier mapping; falls back to title match on "Tier 1"/"Tier 2")
+//
+// v7.7.11 (2026-07-12) — BULLETPROOF WHOLESALE PUBLICATION:
+//   Shopify B2B contextual pricing needs TWO things per variant:
+//     (1) a price entry in the tier PriceList
+//     (2) the parent product PUBLISHED to the tier Catalog Publication
+//   Prior versions did (1) only. Result: silent invisible prices — a
+//   variant would have a Tier 1 price in Shopify but wouldn't return
+//   from contextualPricing because the product wasn't in the T1
+//   catalog publication. Bulk-run diagnostic on 2026-07-11 showed 91
+//   T1 price entries against only 29 products actually published to
+//   the T1 catalog — 60+ SKUs silently broken.
+//
+//   Fix, in three layers of defense:
+//     - Save-time: `upsertTierPrice` now also publishes the parent to
+//       the tier's catalog publication (idempotent, logged).
+//     - Toggle-time: `setVariantWholesaleActive(id, true)` publishes to
+//       BOTH catalogs (no harm publishing to one that has no prices).
+//       `setVariantWholesaleActive(id, false)` clears prices then
+//       unpublishes each tier where no variant of the parent product
+//       has any remaining price entry.
+//     - Cron: `/api/cron/wholesale-reconcile` runs `reconcilePublications`
+//       nightly — computes the delta between each tier's price-list
+//       products and its catalog publication, publishes any missing.
+//   Every action is logged to `wholesale_publication_backfill_log`
+//   in Supabase (source, tier, product_id, action, ok, user_errors).
+//
+//   `custom.wholesale_active` metafield: kept as an internal
+//   "operator intent" flag (drives the row-opacity + `active` filter in
+//   the UI), but is NO LONGER treated as if Shopify gates on it —
+//   because Shopify doesn't. The checkbox label in the grid header is
+//   renamed "Enable pricing" to reflect what it actually does: it
+//   triggers the publish/unpublish + price-clear plumbing.
 //
 // v7.4 (2026-07-07):
 //   - Variant-level wholesale_active metafield (product-level kept as fallback
@@ -108,6 +141,15 @@ export type Tier = 't1' | 't2';
 function priceListId(tier: Tier): string {
   const id = tier === 't1' ? process.env.WHOLESALE_T1_PRICE_LIST_ID : process.env.WHOLESALE_T2_PRICE_LIST_ID;
   if (!id) throw new Error(`Missing price list env for ${tier}`);
+  return id;
+}
+
+// v7.7.11: catalog publication IDs — required for the
+// contextualPricing pipeline to actually resolve tier prices.
+function publicationId(tier: Tier): string {
+  const id =
+    tier === 't1' ? process.env.WHOLESALE_T1_PUBLICATION_ID : process.env.WHOLESALE_T2_PUBLICATION_ID;
+  if (!id) throw new Error(`Missing publication env for ${tier}`);
   return id;
 }
 
@@ -325,6 +367,246 @@ export async function loadGrid(): Promise<GridRow[]> {
   return rows;
 }
 
+// ---------- Publication helpers (v7.7.11) ----------
+
+/** Fire-and-forget insert into wholesale_publication_backfill_log. Never throws. */
+async function logPublishAction(row: {
+  source: 'save_handler' | 'toggle' | 'cron' | 'backfill' | 'manual';
+  tier: 't1' | 't2';
+  publication_id: string;
+  product_id: string;
+  action: 'publish' | 'unpublish' | 'skip_already_published' | 'skip_no_price';
+  ok: boolean;
+  user_errors?: unknown;
+  note?: string | null;
+}): Promise<void> {
+  try {
+    const url = (process.env.UNDERSTORY_SUPABASE_URL ?? '').replace(/\/+$/, '');
+    const key = process.env.UNDERSTORY_SUPABASE_SERVICE_ROLE_KEY ?? '';
+    if (!url || !key) return;
+    await fetch(`${url}/rest/v1/wholesale_publication_backfill_log`, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({
+        ...row,
+        tier: row.tier.toUpperCase(),
+        user_errors: row.user_errors ?? null,
+        note: row.note ?? null,
+      }),
+      cache: 'no-store',
+    });
+  } catch (e) {
+    console.warn('[wholesale] logPublishAction failed:', (e as Error).message);
+  }
+}
+
+/** Resolve the parent product ID for a given variant ID. */
+async function getProductIdForVariant(variantId: string): Promise<string> {
+  const data = await shopifyGraphQL<{ productVariant: { product: { id: string } } | null }>(
+    `query($id: ID!) { productVariant(id: $id) { product { id } } }`,
+    { id: variantId }
+  );
+  const id = data.productVariant?.product?.id;
+  if (!id) throw new Error(`No parent product for variant ${variantId}`);
+  return id;
+}
+
+/** Return the set of variant IDs belonging to a product. */
+async function fetchProductVariantIds(productId: string): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const data = await shopifyGraphQL<{
+    product: { variants: { nodes: Array<{ id: string }> } } | null;
+  }>(
+    `query($id: ID!) {
+      product(id: $id) { variants(first: 100) { nodes { id } } }
+    }`,
+    { id: productId }
+  );
+  for (const v of data.product?.variants?.nodes ?? []) ids.add(v.id);
+  return ids;
+}
+
+/**
+ * Idempotently publish a product to a tier's catalog publication. If the
+ * product is already published, this is a no-op (`skip_already_published`
+ * is logged). Never unpublishes; safe to call whenever a price is written.
+ */
+export async function ensureProductPublishedToTier(
+  productId: string,
+  tier: Tier,
+  source: 'save_handler' | 'toggle' | 'cron' | 'backfill'
+): Promise<{ ok: boolean; alreadyPublished: boolean; userErrors: unknown[] }> {
+  const pubId = publicationId(tier);
+
+  // Check first — cheaper than mutating if already published.
+  const check = await shopifyGraphQL<{
+    product: { publishedOnPublication: boolean } | null;
+  }>(
+    `query($id: ID!, $pubId: ID!) {
+      product(id: $id) { publishedOnPublication(publicationId: $pubId) }
+    }`,
+    { id: productId, pubId }
+  );
+  if (check.product?.publishedOnPublication) {
+    await logPublishAction({
+      source,
+      tier,
+      publication_id: pubId,
+      product_id: productId,
+      action: 'skip_already_published',
+      ok: true,
+    });
+    return { ok: true, alreadyPublished: true, userErrors: [] };
+  }
+
+  const mut = await shopifyGraphQL<{
+    publishablePublish: {
+      publishable: { publishedOnPublication: boolean } | null;
+      userErrors: Array<{ field?: string[] | null; message: string }>;
+    };
+  }>(
+    `mutation Publish($id: ID!, $pubId: ID!) {
+      publishablePublish(id: $id, input: [{ publicationId: $pubId }]) {
+        publishable { ... on Product { publishedOnPublication(publicationId: $pubId) } }
+        userErrors { field message }
+      }
+    }`,
+    { id: productId, pubId }
+  );
+
+  const errs = mut.publishablePublish.userErrors ?? [];
+  const nowPub = mut.publishablePublish.publishable?.publishedOnPublication ?? false;
+  const ok = errs.length === 0 && nowPub;
+  await logPublishAction({
+    source,
+    tier,
+    publication_id: pubId,
+    product_id: productId,
+    action: 'publish',
+    ok,
+    user_errors: errs.length ? errs : null,
+  });
+  if (!ok) console.warn('[wholesale] ensurePublish failed', productId, tier, errs);
+  return { ok, alreadyPublished: false, userErrors: errs };
+}
+
+/**
+ * If NONE of the product's variants have a price in the given tier's
+ * price list, remove the product from that tier's catalog publication.
+ * Used by the toggle-OFF path so a cleanly disabled product actually
+ * disappears from the wholesale catalog.
+ */
+export async function unpublishFromTierIfEmpty(
+  productId: string,
+  tier: Tier,
+  source: 'toggle' | 'cron'
+): Promise<{ unpublished: boolean }> {
+  const pubId = publicationId(tier);
+  const variantIds = await fetchProductVariantIds(productId);
+  if (variantIds.size === 0) return { unpublished: false };
+
+  // Any variant of this product still priced in the tier?
+  const tierMap = await fetchTierPrices(tier);
+  for (const vid of variantIds) {
+    if (tierMap.has(vid)) {
+      await logPublishAction({
+        source,
+        tier,
+        publication_id: pubId,
+        product_id: productId,
+        action: 'skip_no_price', // misnomer — "skip: still has prices"
+        ok: true,
+        note: 'still has priced variants; not unpublishing',
+      });
+      return { unpublished: false };
+    }
+  }
+
+  const mut = await shopifyGraphQL<{
+    publishableUnpublish: {
+      publishable: { publishedOnPublication: boolean } | null;
+      userErrors: Array<{ field?: string[] | null; message: string }>;
+    };
+  }>(
+    `mutation Unpub($id: ID!, $pubId: ID!) {
+      publishableUnpublish(id: $id, input: [{ publicationId: $pubId }]) {
+        publishable { ... on Product { publishedOnPublication(publicationId: $pubId) } }
+        userErrors { field message }
+      }
+    }`,
+    { id: productId, pubId }
+  );
+
+  const errs = mut.publishableUnpublish.userErrors ?? [];
+  const stillPub = mut.publishableUnpublish.publishable?.publishedOnPublication ?? false;
+  const ok = errs.length === 0 && !stillPub;
+  await logPublishAction({
+    source,
+    tier,
+    publication_id: pubId,
+    product_id: productId,
+    action: 'unpublish',
+    ok,
+    user_errors: errs.length ? errs : null,
+  });
+  if (!ok) console.warn('[wholesale] unpublish failed', productId, tier, errs);
+  return { unpublished: ok };
+}
+
+/**
+ * Full reconciliation pass: for each tier, publish every product that has
+ * a price-list entry but is missing from the tier catalog publication.
+ * Used by the nightly cron self-heal and by ops backfills. Never
+ * unpublishes here — that's a destructive action reserved for the
+ * toggle-off path.
+ */
+export async function reconcilePublications(
+  source: 'cron' | 'backfill'
+): Promise<{
+  t1: { checked: number; published: number; errors: number };
+  t2: { checked: number; published: number; errors: number };
+}> {
+  const out = {
+    t1: { checked: 0, published: 0, errors: 0 },
+    t2: { checked: 0, published: 0, errors: 0 },
+  };
+  for (const tier of ['t1', 't2'] as Tier[]) {
+    const priceMap = await fetchTierPrices(tier);
+    // Collect distinct parent products from priced variants.
+    // fetchTierPrices returns variantId → amount, so we need to look up
+    // parents. Batch via aliased query, 40 at a time.
+    const variantIds = [...priceMap.keys()];
+    const parents = new Set<string>();
+    for (let i = 0; i < variantIds.length; i += 40) {
+      const chunk = variantIds.slice(i, i + 40);
+      const q = `query { ${chunk
+        .map(
+          (id, j) => `v${j}: productVariant(id: "${id}") { product { id } }`
+        )
+        .join(' ')} }`;
+      const res = await shopifyGraphQL<Record<string, { product: { id: string } } | null>>(q);
+      for (let j = 0; j < chunk.length; j++) {
+        const p = res[`v${j}`]?.product?.id;
+        if (p) parents.add(p);
+      }
+    }
+
+    const parentIds = [...parents];
+    out[tier].checked = parentIds.length;
+    for (const pid of parentIds) {
+      const r = await ensureProductPublishedToTier(pid, tier, source);
+      if (r.ok && !r.alreadyPublished) out[tier].published += 1;
+      if (!r.ok) out[tier].errors += 1;
+    }
+  }
+  return out;
+}
+
 // ---------- Price writes ----------
 
 export async function updateRetailPrice(productId: string, variantId: string, price: string): Promise<void> {
@@ -341,7 +623,15 @@ export async function updateRetailPrice(productId: string, variantId: string, pr
   assertNoUserErrors(data.productVariantsBulkUpdate.userErrors, 'updateRetailPrice');
 }
 
-/** Upsert a tier fixed price (priceListFixedPricesAdd = add-or-replace). */
+/** Upsert a tier fixed price (priceListFixedPricesAdd = add-or-replace).
+ *
+ * v7.7.11: after the price is added, ensure the parent product is published
+ * to the tier's catalog publication — without this, Shopify's contextual
+ * pricing pipeline silently returns null for the tier price even though the
+ * price-list entry exists. The publish is idempotent and its failure is
+ * logged but NOT propagated: the price write itself succeeded, and the
+ * nightly cron will re-attempt the publish on any product that missed it.
+ */
 export async function upsertTierPrice(tier: Tier, variantId: string, amount: string): Promise<void> {
   const data = await shopifyGraphQL<{
     priceListFixedPricesAdd: { userErrors: Array<{ field?: string[]; message: string }> };
@@ -357,6 +647,14 @@ export async function upsertTierPrice(tier: Tier, variantId: string, amount: str
     }
   );
   assertNoUserErrors(data.priceListFixedPricesAdd.userErrors, `upsertTierPrice(${tier})`);
+
+  // v7.7.11: bulletproof catalog publication.
+  try {
+    const productId = await getProductIdForVariant(variantId);
+    await ensureProductPublishedToTier(productId, tier, 'save_handler');
+  } catch (e) {
+    console.warn('[wholesale] upsertTierPrice publish step warning:', (e as Error).message);
+  }
 }
 
 export async function clearTierPrice(tier: Tier, variantId: string): Promise<void> {
@@ -373,17 +671,28 @@ export async function clearTierPrice(tier: Tier, variantId: string): Promise<voi
   assertNoUserErrors(data.priceListFixedPricesDelete.userErrors, `clearTierPrice(${tier})`);
 }
 
-// ---------- Toggle (v7.4: variant-level) ----------
+// ---------- Toggle (v7.4: variant-level; v7.7.11: publishes catalog) ----------
 
 /**
- * Toggle a single variant's wholesale_active metafield.
- * on:  variant metafield -> 'true'
- * off: variant metafield -> 'false' + clear any fixed tier overrides on that variant
+ * Toggle a single variant's wholesale_active metafield AND drive the
+ * corresponding Shopify catalog publication state for the parent product.
  *
- * Product visibility in each tier catalog is managed in Shopify Admin
- * (Product → Publishing → LoPro Wholesale Tier N). Not touched here — the
- * previous product-level publish/unpublish path pointed at publication IDs
- * that no longer exist on this store.
+ * v7.7.11 semantics:
+ *   on:  variant metafield -> 'true'
+ *        parent product   -> publishablePublish to BOTH T1 and T2 catalogs
+ *                            (idempotent; publishing to a tier that has no
+ *                            price for this variant is harmless — Shopify
+ *                            simply won't resolve a contextual price there)
+ *   off: variant metafield -> 'false'
+ *        variant tier prices -> cleared from BOTH price lists
+ *        parent product -> for each tier, unpublish IF no variant of the
+ *                          product still has a price in that tier's list
+ *
+ * The metafield is retained purely as an internal "operator intent" flag
+ * so the UI can dim disabled rows and default the filter to enabled items.
+ * Prior versions treated the metafield as if Shopify honored it — Shopify
+ * does not; the catalog publication + price-list entry are what actually
+ * make a variant show up at wholesale. Root cause: 2026-07-11 diagnostic.
  */
 export async function setVariantWholesaleActive(variantId: string, active: boolean): Promise<void> {
   const meta = await shopifyGraphQL<{
@@ -406,12 +715,40 @@ export async function setVariantWholesaleActive(variantId: string, active: boole
   );
   assertNoUserErrors(meta.metafieldsSet.userErrors, 'setVariantWholesaleActive.metafieldsSet');
 
-  if (!active) {
+  // Best-effort resolve parent — used by both branches below.
+  let productId: string | null = null;
+  try {
+    productId = await getProductIdForVariant(variantId);
+  } catch (e) {
+    console.warn('[wholesale] toggle: parent lookup failed:', (e as Error).message);
+  }
+
+  if (active) {
+    if (productId) {
+      for (const tier of ['t1', 't2'] as Tier[]) {
+        try {
+          await ensureProductPublishedToTier(productId, tier, 'toggle');
+        } catch (e) {
+          console.warn('[wholesale] toggle-on publish warning:', tier, (e as Error).message);
+        }
+      }
+    }
+  } else {
+    // Clear prices first, then reassess publication state.
     for (const tier of ['t1', 't2'] as Tier[]) {
       try {
         await clearTierPrice(tier, variantId);
       } catch {
         // variant had no fixed override in this list — fine
+      }
+    }
+    if (productId) {
+      for (const tier of ['t1', 't2'] as Tier[]) {
+        try {
+          await unpublishFromTierIfEmpty(productId, tier, 'toggle');
+        } catch (e) {
+          console.warn('[wholesale] toggle-off unpublish warning:', tier, (e as Error).message);
+        }
       }
     }
   }
