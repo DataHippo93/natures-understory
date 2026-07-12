@@ -135,6 +135,8 @@
 //     company's tier flags. Rendered on the Recipients tab.
 
 import { shopifyGraphQL, assertNoUserErrors } from './shopify-lopro';
+// v7.7.12: audit trail wired into every save handler below.
+import { logPriceHistory, type HistoryActor } from './wholesale-history';
 
 export type Tier = 't1' | 't2';
 
@@ -609,7 +611,12 @@ export async function reconcilePublications(
 
 // ---------- Price writes ----------
 
-export async function updateRetailPrice(productId: string, variantId: string, price: string): Promise<void> {
+export async function updateRetailPrice(
+  productId: string,
+  variantId: string,
+  price: string,
+  actor?: HistoryActor & { previousAmount?: string | null }
+): Promise<void> {
   const data = await shopifyGraphQL<{
     productVariantsBulkUpdate: { userErrors: Array<{ field?: string[]; message: string }> };
   }>(
@@ -621,6 +628,15 @@ export async function updateRetailPrice(productId: string, variantId: string, pr
     { productId, variants: [{ id: variantId, price }] }
   );
   assertNoUserErrors(data.productVariantsBulkUpdate.userErrors, 'updateRetailPrice');
+  // v7.7.12: audit trail. previousAmount comes from the client (grid row snapshot).
+  await logPriceHistory({
+    variantId,
+    tier: 'RETAIL',
+    amount: price,
+    previousAmount: actor?.previousAmount ?? null,
+    changeType: 'set',
+    actor: { ...actor, productId: actor?.productId ?? productId },
+  });
 }
 
 /** Upsert a tier fixed price (priceListFixedPricesAdd = add-or-replace).
@@ -632,7 +648,12 @@ export async function updateRetailPrice(productId: string, variantId: string, pr
  * logged but NOT propagated: the price write itself succeeded, and the
  * nightly cron will re-attempt the publish on any product that missed it.
  */
-export async function upsertTierPrice(tier: Tier, variantId: string, amount: string): Promise<void> {
+export async function upsertTierPrice(
+  tier: Tier,
+  variantId: string,
+  amount: string,
+  actor?: HistoryActor & { previousAmount?: string | null }
+): Promise<void> {
   const data = await shopifyGraphQL<{
     priceListFixedPricesAdd: { userErrors: Array<{ field?: string[]; message: string }> };
   }>(
@@ -655,9 +676,23 @@ export async function upsertTierPrice(tier: Tier, variantId: string, amount: str
   } catch (e) {
     console.warn('[wholesale] upsertTierPrice publish step warning:', (e as Error).message);
   }
+
+  // v7.7.12: audit trail.
+  await logPriceHistory({
+    variantId,
+    tier: tier === 't1' ? 'T1' : 'T2',
+    amount,
+    previousAmount: actor?.previousAmount ?? null,
+    changeType: 'set',
+    actor,
+  });
 }
 
-export async function clearTierPrice(tier: Tier, variantId: string): Promise<void> {
+export async function clearTierPrice(
+  tier: Tier,
+  variantId: string,
+  actor?: HistoryActor & { previousAmount?: string | null }
+): Promise<void> {
   const data = await shopifyGraphQL<{
     priceListFixedPricesDelete: { userErrors: Array<{ field?: string[]; message: string }> };
   }>(
@@ -669,6 +704,15 @@ export async function clearTierPrice(tier: Tier, variantId: string): Promise<voi
     { priceListId: priceListId(tier), variantIds: [variantId] }
   );
   assertNoUserErrors(data.priceListFixedPricesDelete.userErrors, `clearTierPrice(${tier})`);
+  // v7.7.12: audit trail.
+  await logPriceHistory({
+    variantId,
+    tier: tier === 't1' ? 'T1' : 'T2',
+    amount: null,
+    previousAmount: actor?.previousAmount ?? null,
+    changeType: 'cleared',
+    actor,
+  });
 }
 
 // ---------- Toggle (v7.4: variant-level; v7.7.11: publishes catalog) ----------
@@ -694,7 +738,11 @@ export async function clearTierPrice(tier: Tier, variantId: string): Promise<voi
  * does not; the catalog publication + price-list entry are what actually
  * make a variant show up at wholesale. Root cause: 2026-07-11 diagnostic.
  */
-export async function setVariantWholesaleActive(variantId: string, active: boolean): Promise<void> {
+export async function setVariantWholesaleActive(
+  variantId: string,
+  active: boolean,
+  actor?: HistoryActor & { previousActive?: boolean }
+): Promise<void> {
   const meta = await shopifyGraphQL<{
     metafieldsSet: { userErrors: Array<{ field?: string[]; message: string }> };
   }>(
@@ -752,6 +800,16 @@ export async function setVariantWholesaleActive(variantId: string, active: boole
       }
     }
   }
+
+  // v7.7.12: audit trail. Fire-and-forget; failures already caught inside.
+  await logPriceHistory({
+    variantId,
+    tier: 'WHOLESALE_ACTIVE',
+    amount: null,
+    previousAmount: null,
+    changeType: active ? 'toggled_on' : 'toggled_off',
+    actor: { ...actor, productId: actor?.productId ?? productId ?? null },
+  });
 }
 
 // ---------- Recipients (v7.4: auto from B2B Companies; v7.7.9: split pass + hard defaults) ----------

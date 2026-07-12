@@ -101,6 +101,22 @@ interface PricelistDraft {
   itemCount: number;
 }
 
+// v7.7.12: audit trail modal.
+interface HistoryEntry {
+  id: string;
+  changed_at: string;
+  variant_id: string;
+  product_id: string | null;
+  product_title: string | null;
+  variant_title: string | null;
+  tier: 'T1' | 'T2' | 'RETAIL' | 'WHOLESALE_ACTIVE';
+  price_cents: number | null;
+  previous_price_cents: number | null;
+  change_type: 'set' | 'cleared' | 'toggled_on' | 'toggled_off';
+  changed_by_email: string | null;
+  source: string;
+}
+
 type CellField = 'retail' | 't1' | 't2';
 type SyncState = 'idle' | 'syncing' | 'synced' | 'error';
 
@@ -135,6 +151,13 @@ export default function WholesaleClient() {
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState<(PricelistDraft & { tier: Tier }) | null>(null);
   const [generating, setGenerating] = useState<Tier | null>(null);
+  // v7.7.12: price-history modal state.
+  const [history, setHistory] = useState<{
+    row: GridRow;
+    entries: HistoryEntry[] | null;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
   // v7.7.5: show/hide $0 balance rows in the Recipients-tab balance section.
   const [showZeroT1, setShowZeroT1] = useState(false);
   const [showZeroT2, setShowZeroT2] = useState(false);
@@ -250,6 +273,34 @@ export default function WholesaleClient() {
     }
   }, []);
 
+  // v7.7.12: fetch + open the history modal for a variant.
+  const openHistory = useCallback(async (row: GridRow) => {
+    setHistory({ row, entries: null, loading: true, error: null });
+    try {
+      const res = await fetch(
+        `/api/wholesale/history?variantId=${encodeURIComponent(row.variantId)}&limit=20`,
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setHistory((h) =>
+        h && h.row.variantId === row.variantId
+          ? { ...h, entries: data.rows ?? [], loading: false }
+          : h,
+      );
+    } catch (e) {
+      setHistory((h) =>
+        h && h.row.variantId === row.variantId
+          ? {
+              ...h,
+              entries: [],
+              loading: false,
+              error: e instanceof Error ? e.message : 'Failed to load history',
+            }
+          : h,
+      );
+    }
+  }, []);
+
   const commit = useCallback(
     (row: GridRow, field: CellField, raw: string) => {
       const key = `${row.variantId}:${field}`;
@@ -283,6 +334,15 @@ export default function WholesaleClient() {
             productId: row.productId,
             variantId: row.variantId,
             amount: value === '' ? null : value,
+            // v7.7.12: audit trail context.
+            previousAmount:
+              field === 'retail'
+                ? row.retail
+                : field === 't1'
+                  ? row.tier1
+                  : row.tier2,
+            productTitle: row.productTitle,
+            variantTitle: row.variantTitle,
           }),
         });
         setCell(key, res.ok ? 'synced' : 'error');
@@ -299,7 +359,15 @@ export default function WholesaleClient() {
     const res = await fetch('/api/wholesale/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ variantId: row.variantId, active: next }),
+      // v7.7.12: audit trail context.
+      body: JSON.stringify({
+        variantId: row.variantId,
+        active: next,
+        previousActive: row.wholesaleActive,
+        productId: row.productId,
+        productTitle: row.productTitle,
+        variantTitle: row.variantTitle,
+      }),
     });
     if (!res.ok) {
       setRows((rs) =>
@@ -703,6 +771,26 @@ export default function WholesaleClient() {
                           >
                             ↗
                           </a>
+                          {/* v7.7.12: price history */}
+                          <button
+                            type="button"
+                            onClick={() => openHistory(row)}
+                            title="View price history"
+                            aria-label={`View price history for ${row.productTitle}`}
+                            className="text-sm leading-none"
+                            style={{
+                              background: 'transparent',
+                              border: 0,
+                              cursor: 'pointer',
+                              color: 'var(--sage)',
+                              opacity: 0.7,
+                              padding: 0,
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                            onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.7')}
+                          >
+                            🕒
+                          </button>
                         </div>
                       </td>
                       <td className="px-3 py-1" style={{ color: 'var(--cream)' }}>{row.productTitle}</td>
@@ -748,6 +836,24 @@ export default function WholesaleClient() {
                       >
                         ↗
                       </a>
+                      {/* v7.7.12: price history */}
+                      <button
+                        type="button"
+                        onClick={() => openHistory(row)}
+                        title="View price history"
+                        aria-label={`View price history for ${row.productTitle}`}
+                        className="text-sm leading-none"
+                        style={{
+                          background: 'transparent',
+                          border: 0,
+                          cursor: 'pointer',
+                          color: 'var(--sage)',
+                          opacity: 0.7,
+                          padding: 0,
+                        }}
+                      >
+                        🕒
+                      </button>
                       <span className="font-medium" style={{ color: 'var(--cream)' }}>
                         {row.productTitle}
                       </span>
@@ -948,6 +1054,167 @@ export default function WholesaleClient() {
           </div>
         </div>
       )}
+      {/* v7.7.12: price-history modal. Styled like the Tier X Pricelist modal above. */}
+      {history && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.6)' }}
+          onClick={() => setHistory(null)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-lg p-5"
+            style={{ background: 'var(--forest-darkest)', border: '1px solid var(--forest-mid)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold" style={{ color: 'var(--cream)' }}>
+                  Price History · {history.row.productTitle}
+                  {history.row.variantTitle && history.row.variantTitle !== 'Default Title' ? (
+                    <span style={{ color: 'var(--text-muted)' }}> · {history.row.variantTitle}</span>
+                  ) : null}
+                </h2>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Every price change on this variant, most recent first. Retail, Tier 1, Tier 2, and wholesale-active toggles are all captured.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistory(null)}
+                aria-label="Close"
+                style={{ color: 'var(--gold)', fontSize: '1.1rem', lineHeight: 1, background: 'transparent', border: 0, cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {history.loading ? (
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Loading history…</p>
+            ) : history.error ? (
+              <div
+                className="rounded-md px-4 py-3 text-sm"
+                style={{
+                  background: 'rgba(176,96,96,0.12)',
+                  color: '#b06060',
+                  border: '1px solid rgba(176,96,96,0.25)',
+                }}
+              >
+                {history.error}
+              </div>
+            ) : history.entries && history.entries.length === 0 ? (
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>No changes recorded yet.</p>
+            ) : (
+              <div className="overflow-x-auto rounded-md" style={{ border: '1px solid var(--forest-mid)' }}>
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr style={{ background: 'var(--forest-darkest)', color: 'var(--sage)' }}>
+                      <th className="px-3 py-2 text-left font-medium">When</th>
+                      <th className="px-3 py-2 text-left font-medium">Tier</th>
+                      <th className="px-3 py-2 text-right font-medium">Was</th>
+                      <th className="px-3 py-2 text-center font-medium">→</th>
+                      <th className="px-3 py-2 text-right font-medium">Now</th>
+                      <th className="px-3 py-2 text-left font-medium">Change</th>
+                      <th className="px-3 py-2 text-left font-medium">Who</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(history.entries ?? []).map((e, i) => {
+                      const centsFmt = (c: number | null) =>
+                        c === null || c === undefined ? '—' : '$' + (c / 100).toFixed(2);
+                      const when = new Date(e.changed_at);
+                      const whenTxt = when.toLocaleString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      });
+                      const tierLabel =
+                        e.tier === 'WHOLESALE_ACTIVE'
+                          ? 'active'
+                          : e.tier === 'RETAIL'
+                            ? 'Retail'
+                            : e.tier;
+                      const isToggle = e.tier === 'WHOLESALE_ACTIVE';
+                      const was = isToggle
+                        ? e.change_type === 'toggled_on'
+                          ? 'OFF'
+                          : 'ON'
+                        : centsFmt(e.previous_price_cents);
+                      const now = isToggle
+                        ? e.change_type === 'toggled_on'
+                          ? 'ON'
+                          : 'OFF'
+                        : e.change_type === 'cleared'
+                          ? '(cleared)'
+                          : centsFmt(e.price_cents);
+                      const changeLabel = e.change_type.replace('_', ' ');
+                      return (
+                        <tr
+                          key={e.id}
+                          style={{
+                            borderTop: i === 0 ? 'none' : '1px solid var(--forest-mid)',
+                            color: 'var(--cream)',
+                          }}
+                        >
+                          <td className="whitespace-nowrap px-3 py-1" style={{ color: 'var(--text-muted)' }}>{whenTxt}</td>
+                          <td className="whitespace-nowrap px-3 py-1">{tierLabel}</td>
+                          <td className="whitespace-nowrap px-3 py-1 text-right" style={{ color: 'var(--text-muted)' }}>{was}</td>
+                          <td className="px-3 py-1 text-center" style={{ color: 'var(--text-muted)' }}>→</td>
+                          <td className="whitespace-nowrap px-3 py-1 text-right">{now}</td>
+                          <td className="whitespace-nowrap px-3 py-1" style={{ color: 'var(--sage)' }}>{changeLabel}</td>
+                          <td className="whitespace-nowrap px-3 py-1" style={{ color: 'var(--text-muted)' }}>
+                            {e.changed_by_email ?? '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="mt-3 flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
+              <span>showing last {history.entries?.length ?? 0}</span>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const rows = history.entries ?? [];
+                    const header = ['changed_at', 'tier', 'was_cents', 'now_cents', 'change_type', 'changed_by_email', 'source'];
+                    const esc = (s: string) => '"' + s.replace(/"/g, '""') + '"';
+                    const csv = [
+                      header.join(','),
+                      ...rows.map((r) =>
+                        [
+                          r.changed_at,
+                          r.tier,
+                          r.previous_price_cents ?? '',
+                          r.price_cents ?? '',
+                          r.change_type,
+                          r.changed_by_email ?? '',
+                          r.source,
+                        ]
+                          .map((v) => esc(String(v ?? '')))
+                          .join(','),
+                      ),
+                    ].join('\n');
+                    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `wholesale-history-${history.row.variantId.split('/').pop()}.csv`;
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  }}
+                  style={{ color: 'var(--gold)', background: 'transparent', border: 0, textDecoration: 'underline', cursor: 'pointer' }}
+                >
+                  Export CSV
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toast && (
         <div
           role="status"

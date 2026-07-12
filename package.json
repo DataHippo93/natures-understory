@@ -1,6 +1,6 @@
 {
   "name": "natures-understory",
-  "version": "7.7.11",
+  "version": "7.7.12",
   "private": true,
   "scripts": {
     "dev": "next dev",
