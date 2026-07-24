@@ -1,4 +1,8 @@
 // Tier pricelist generation: HTML + plain-text email body + deduped BCC list.
+// v7.8 (2026-07-24): item set additionally requires emailVisible - the
+// per-variant "In email" checkbox in the wholesale grid. Unchecked variants
+// keep their wholesale pricing/publication (checkout unaffected) but are
+// left out of BOTH tier email drafts.
 // v7.5 (2026-07-07): four-column layout — Item / Retail / Your price / Save% —
 // so recipients see their discount vs retail. Item set = wholesale-active
 // variants that have a NON-NULL tier price (blank tier price = customer pays
@@ -42,7 +46,8 @@ export async function generatePricelistDraft(tier: Tier): Promise<PricelistDraft
   const lines: Line[] = rows
     .filter((r) => {
       const t = tier === 't1' ? r.tier1 : r.tier2;
-      return r.wholesaleActive && t !== null && t !== '';
+      // v7.8: emailVisible gates the EMAIL only - Shopify checkout untouched.
+      return r.wholesaleActive && r.emailVisible && t !== null && t !== '';
     })
     .map((r) => {
       const retail = Number(r.retail) || 0;

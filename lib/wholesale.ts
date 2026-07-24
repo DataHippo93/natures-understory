@@ -251,6 +251,7 @@ export interface GridRow {
   tier1: string | null; // resolved price (FIXED override wins; else RELATIVE from catalog); null = variant not in list
   tier2: string | null;
   wholesaleActive: boolean; // per-variant
+  emailVisible: boolean; // v7.8: include in tier pricelist emails; ABSENT metafield = true
   adminUrl: string; // v7.7.3: Shopify Admin variant edit URL
 }
 
@@ -269,6 +270,7 @@ interface ProductsPage {
           title: string;
           price: string;
           metafield: { value: string } | null;
+          emailMeta: { value: string } | null; // v7.8: custom.email_visible
           inventoryItem: { unitCost: { amount: string } | null } | null;
         }>;
       };
@@ -333,6 +335,7 @@ export async function loadGrid(): Promise<GridRow[]> {
               nodes {
                 id title price
                 metafield(namespace: "custom", key: "wholesale_active") { value }
+                emailMeta: metafield(namespace: "custom", key: "email_visible") { value }
                 inventoryItem { unitCost { amount } }
               }
             }
@@ -359,6 +362,10 @@ export async function loadGrid(): Promise<GridRow[]> {
           tier1: t1.get(v.id) ?? null,
           tier2: t2.get(v.id) ?? null,
           wholesaleActive: variantActive,
+          // v7.8: only an explicit 'false' hides a variant from the pricelist
+          // email - absent metafield defaults to visible so nothing silently
+          // disappears when this feature ships.
+          emailVisible: v.emailMeta?.value !== 'false',
           adminUrl: shopifyAdminUrl(p.id, v.id),
         });
       }
@@ -809,6 +816,55 @@ export async function setVariantWholesaleActive(
     previousAmount: null,
     changeType: active ? 'toggled_on' : 'toggled_off',
     actor: { ...actor, productId: actor?.productId ?? productId ?? null },
+  });
+}
+
+// ---------- Email visibility (v7.8) ----------
+
+/**
+ * v7.8: per-variant "visible on wholesale email" flag (`custom.email_visible`).
+ * Decouples the tier pricelist EMAIL from wholesale purchasability: a scarce
+ * item can stay wholesale-active (checkout keeps working for the companies
+ * that already buy it) while being left out of the broadcast pricelist email.
+ *
+ * Semantics: metafield ABSENT or 'true' = visible. Only an explicit 'false'
+ * hides the item - every existing item defaults to visible, and unchecking
+ * the box in the grid is the deliberate act. Deliberately does NOT touch
+ * price lists or catalog publications (that's `setVariantWholesaleActive`).
+ */
+export async function setVariantEmailVisible(
+  variantId: string,
+  visible: boolean,
+  actor?: HistoryActor
+): Promise<void> {
+  const meta = await shopifyGraphQL<{
+    metafieldsSet: { userErrors: Array<{ field?: string[]; message: string }> };
+  }>(
+    `mutation($metafields: [MetafieldsSetInput!]!) {
+      metafieldsSet(metafields: $metafields) { userErrors { field message } }
+    }`,
+    {
+      metafields: [
+        {
+          ownerId: variantId,
+          namespace: 'custom',
+          key: 'email_visible',
+          type: 'boolean',
+          value: visible ? 'true' : 'false',
+        },
+      ],
+    }
+  );
+  assertNoUserErrors(meta.metafieldsSet.userErrors, 'setVariantEmailVisible.metafieldsSet');
+
+  // Audit trail, same fire-and-forget pattern as the wholesale toggle.
+  await logPriceHistory({
+    variantId,
+    tier: 'EMAIL_VISIBLE',
+    amount: null,
+    previousAmount: null,
+    changeType: visible ? 'toggled_on' : 'toggled_off',
+    actor,
   });
 }
 

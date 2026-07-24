@@ -5,6 +5,8 @@
 // hit /api/wholesale/* which enforce the wholesale_manager/admin role.
 //
 // v7.4 (2026-07-07): variant-level checkbox + read-only Recipients tab.
+// v7.8 (2026-07-24): In email checkbox - per-variant email_visible metafield
+//   gates the tier pricelist emails without touching checkout/publication.
 // v7.5 (2026-07-07): pricelist modal shows Copy plain text button; draft
 //   includes both htmlBody and textBody (backend renders symmetric Retail /
 //   Your price / Save% columns in both formats).
@@ -72,6 +74,7 @@ interface GridRow {
   tier1: string | null;
   tier2: string | null;
   wholesaleActive: boolean;
+  emailVisible: boolean;
   adminUrl: string;
 }
 
@@ -109,7 +112,7 @@ interface HistoryEntry {
   product_id: string | null;
   product_title: string | null;
   variant_title: string | null;
-  tier: 'T1' | 'T2' | 'RETAIL' | 'WHOLESALE_ACTIVE';
+  tier: 'T1' | 'T2' | 'RETAIL' | 'WHOLESALE_ACTIVE' | 'EMAIL_VISIBLE';
   price_cents: number | null;
   previous_price_cents: number | null;
   change_type: 'set' | 'cleared' | 'toggled_on' | 'toggled_off';
@@ -382,6 +385,31 @@ export default function WholesaleClient() {
     }
   }, []);
 
+  // v7.8: flip "visible on wholesale email" - optimistic, rolls back on failure.
+  // Email-only flag: does NOT touch tier prices or catalog publication.
+  const toggleEmail = useCallback(async (row: GridRow) => {
+    const next = !row.emailVisible;
+    setRows((rs) =>
+      rs!.map((r) => (r.variantId === row.variantId ? { ...r, emailVisible: next } : r))
+    );
+    const res = await fetch('/api/wholesale/email-visibility', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        variantId: row.variantId,
+        visible: next,
+        productId: row.productId,
+        productTitle: row.productTitle,
+        variantTitle: row.variantTitle,
+      }),
+    });
+    if (!res.ok) {
+      setRows((rs) =>
+        rs!.map((r) => (r.variantId === row.variantId ? { ...r, emailVisible: !next } : r))
+      );
+    }
+  }, []);
+
   const generate = useCallback(async (tier: Tier) => {
     setGenerating(tier);
     setLoadError(null);
@@ -399,7 +427,7 @@ export default function WholesaleClient() {
 
   const exportCsv = useCallback(() => {
     if (!rows || rows.length === 0) return;
-    const header = ['item', 'variant', 'retail', 'lot_cost', 'tier1', 'tier2', 'wholesale_active', 'shopify_admin_url'];
+    const header = ['item', 'variant', 'retail', 'lot_cost', 'tier1', 'tier2', 'wholesale_active', 'email_visible', 'shopify_admin_url'];
     const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const lines = [
       header.join(','),
@@ -412,6 +440,7 @@ export default function WholesaleClient() {
           r.tier1 ?? '',
           r.tier2 ?? '',
           r.wholesaleActive ? 'true' : 'false',
+          r.emailVisible ? 'true' : 'false',
           esc(r.adminUrl),
         ].join(',')
       ),
@@ -705,15 +734,16 @@ export default function WholesaleClient() {
           ) : (
             <div className="rounded-lg" style={{ border: '1px solid var(--forest-mid)' }}>
               {/* v7.7.10: desktop table lives in its own overflow-x-auto wrapper */}
-              {/* + minWidth: 900px so 96px cols always get their space. Table is */}
+              {/* + minWidth: 980px so 96px cols always get their space. Table is */}
               {/* hidden below md; a stacked <ul> below takes over on narrow viewports. */}
               <div className="w-full overflow-x-auto">
               <table
                 className="hidden md:table w-full text-sm"
-                style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: '900px' }}
+                style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: '980px' }}
               >
                 <colgroup>
                   <col style={{ width: '96px' }} />
+                  <col style={{ width: '80px' }} />
                   <col />
                   <col style={{ width: '100px' }} />
                   <col style={{ width: '96px' }} />
@@ -728,6 +758,12 @@ export default function WholesaleClient() {
                       title="Enable this variant for wholesale — publishes the parent product to the tier catalogs and unlocks tier pricing. Disabling clears tier prices and unpublishes if no siblings remain priced. (v7.7.11)"
                     >
                       Enable pricing
+                    </th>
+                    <th
+                      className="px-3 py-2 text-center font-medium"
+                      title="Include this variant in the Tier 1 / Tier 2 pricelist emails. Unchecking hides it from the email drafts ONLY - wholesale checkout and catalog publication are unaffected. (v7.8)"
+                    >
+                      In email
                     </th>
                     <th className="px-3 py-2 text-left font-medium">Item</th>
                     <th className="px-3 py-2 text-left font-medium">Variant</th>
@@ -792,6 +828,15 @@ export default function WholesaleClient() {
                             🕒
                           </button>
                         </div>
+                      </td>
+                      {/* v7.8: email visibility - email drafts only, checkout untouched */}
+                      <td className="px-3 py-1 text-center">
+                        <input
+                          type="checkbox"
+                          checked={row.emailVisible}
+                          onChange={() => toggleEmail(row)}
+                          aria-label={`${row.productTitle} ${row.variantTitle} visible on wholesale email`}
+                        />
                       </td>
                       <td className="px-3 py-1" style={{ color: 'var(--cream)' }}>{row.productTitle}</td>
                       <td className="px-3 py-1" style={{ color: 'var(--text-muted)' }}>
@@ -873,6 +918,16 @@ export default function WholesaleClient() {
                       </div>
                       {mCell(row, 't1', fmt(row.tier1), !row.wholesaleActive, 'Tier 1')}
                       {mCell(row, 't2', fmt(row.tier2), !row.wholesaleActive, 'Tier 2')}
+                      {/* v7.8: email visibility - email drafts only, checkout untouched */}
+                      <label className="flex items-center gap-1">
+                        <span className="min-w-16" style={{ color: 'var(--text-muted)' }}>In email</span>
+                        <input
+                          type="checkbox"
+                          checked={row.emailVisible}
+                          onChange={() => toggleEmail(row)}
+                          aria-label={`${row.productTitle} ${row.variantTitle} visible on wholesale email`}
+                        />
+                      </label>
                     </div>
                   </li>
                 ))}
@@ -882,7 +937,8 @@ export default function WholesaleClient() {
           {rows !== null && (
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
               {visible.length} of {rows.length} rows · greyed rows aren&apos;t wholesale-active — toggle to enable tier pricing ·
-              blank tier cell = customer pays retail
+              blank tier cell = customer pays retail · In email unchecked = hidden from pricelist
+              emails only, wholesale checkout unaffected
             </p>
           )}
         </>
@@ -1131,10 +1187,12 @@ export default function WholesaleClient() {
                       const tierLabel =
                         e.tier === 'WHOLESALE_ACTIVE'
                           ? 'active'
-                          : e.tier === 'RETAIL'
-                            ? 'Retail'
-                            : e.tier;
-                      const isToggle = e.tier === 'WHOLESALE_ACTIVE';
+                          : e.tier === 'EMAIL_VISIBLE'
+                            ? 'in email'
+                            : e.tier === 'RETAIL'
+                              ? 'Retail'
+                              : e.tier;
+                      const isToggle = e.tier === 'WHOLESALE_ACTIVE' || e.tier === 'EMAIL_VISIBLE';
                       const was = isToggle
                         ? e.change_type === 'toggled_on'
                           ? 'OFF'
