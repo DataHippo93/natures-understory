@@ -5,7 +5,7 @@
 // `app/api/wholesale/price` + `/toggle`) and the one-off backfill route
 // funnels through here into Supabase `wholesale_price_history`.
 
-export type HistoryTier = 'T1' | 'T2' | 'RETAIL' | 'WHOLESALE_ACTIVE';
+export type HistoryTier = 'T1' | 'T2' | 'RETAIL' | 'WHOLESALE_ACTIVE' | 'EMAIL_VISIBLE';
 export type HistoryChangeType = 'set' | 'cleared' | 'toggled_on' | 'toggled_off';
 export type HistorySource = 'wholesale_ui' | 'backfill' | 'shopify_sync' | 'api';
 
